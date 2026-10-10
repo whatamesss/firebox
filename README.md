@@ -36,6 +36,15 @@ A security-hardened Bash wrapper for Firefox that launches an ephemeral, sandbox
     # Debug mode
     firebox -v
 
+## Testing the Sandbox (firebox-shell)
+
+`firebox-shell` opens an interactive `bash` shell *inside* the same hardened
+sandbox as `firebox`. Use it to test the environment, run utilities, or try
+other applications under the same isolation (filesystem/PID/IPC namespaces,
+GPU injection, filtered D-Bus portals, blocked hosts) before trusting them:
+
+    firebox-shell
+
 ## Configuration & Persistence
 
 **Important:** Because the sandbox runs in RAM, **all changes made inside a `firebox` session are lost when you close it.** To make persistent changes, use your standard, unsandboxed Firefox instance:

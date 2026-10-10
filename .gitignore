@@ -1,0 +1,6 @@
+# Local opencode configuration (not for publishing)
+opencode.json
+
+# Dated backups of firebox (not for publishing)
+firebox.aug14
+firebox.oct1

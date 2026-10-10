@@ -93,6 +93,13 @@ bash
  
 
 It supports a -v or --verbose flag for debugging output.
+
+6. Testing the sandbox (firebox-shell)
+
+firebox-shell opens an interactive bash shell inside the same hardened sandbox as firebox. Use it to test the environment, run utilities, or try other applications under the same isolation (filesystem/PID/IPC namespaces, GPU injection, filtered D-Bus portals, blocked hosts) before trusting them. Launch with:
+
+     firebox-shell
+
 Summary
 
 This script essentially transforms a standard Firefox installation into a "Tor-browser-like" experience (in terms of sandboxing and ephemerality, though not using the Tor network) by leveraging Linux namespaces and bind mounts. It is designed for users who want to browse the web without leaving traces on their disk or exposing their main system to potential browser exploits.
