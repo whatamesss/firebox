@@ -108,14 +108,14 @@ trap cleanup EXIT INT TERM HUP
 # -------------------------------------------------------------------------
 # Dependency check (Soft + Hard)
 # -------------------------------------------------------------------------
-for cmd in bwrap xdg-dbus-proxy rsync awk file sqlite3; do
+for cmd in bwrap xdg-dbus-proxy rsync awk file sqlite3 findmnt; do
     if ! command -v "$cmd" &>/dev/null; then
         echo "Error: Required command '$cmd' not found" >&2
         exit 1
     fi
 done
 
-for cmd in uuidgen flock; do
+for cmd in uuidgen jq; do
     if ! command -v "$cmd" &>/dev/null; then
         echo "Warning: '$cmd' not available; some features may be degraded." >&2
     fi
@@ -254,6 +254,29 @@ if [[ -z "$SOURCE_PROFILE" || ! -d "$SOURCE_PROFILE" ]]; then
 fi
 
 # -------------------------------------------------------------------------
+# Guard against a running instance of the source profile
+# -------------------------------------------------------------------------
+# While running, Firefox holds an fcntl lock on "<profile>/.parentlock" and
+# maintains a "lock" symlink of the form "<ip>:[+]<pid>". If that pid is still
+# alive the databases may be mid-write, so refuse to copy them rather than risk
+# a stale or corrupt places.sqlite.
+source_profile_in_use() {
+    local profile="$1" target pid
+    [[ -n "$profile" && -L "$profile/lock" ]] || return 1
+    target=$(readlink -- "$profile/lock" 2>/dev/null) || return 1
+    pid="${target##*:}"
+    pid="${pid#+}"
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    kill -0 "$pid" 2>/dev/null
+}
+
+if [[ -n "$SOURCE_PROFILE" ]] && source_profile_in_use "$SOURCE_PROFILE"; then
+    echo "Error: Firefox profile '$SOURCE_PROFILE' is currently in use." >&2
+    echo "       Close the running Firefox instance and try again." >&2
+    exit 1
+fi
+
+# -------------------------------------------------------------------------
 # Populate extensions and storage
 # -------------------------------------------------------------------------
 shopt -s nullglob
@@ -330,6 +353,40 @@ if [[ -d "$EPHEMERAL_PROFILE/storage" ]]; then
 fi
 
 # -------------------------------------------------------------------------
+# Best-effort token scrubbing for extension storage (config is preserved)
+# -------------------------------------------------------------------------
+# Extension configuration is synced so add-ons feel native, but auth tokens
+# and secrets must not be carried across. This only rewrites JSON files
+# (legacy browser-extension-data storage.js); binary IndexedDB is left as-is.
+EXT_TOKEN_RE='(?i)(token|secret|password|passwd|credential|api[_-]?key|bearer|private[_-]?key|session[_-]?id)'
+sanitize_extension_tokens() {
+    command -v jq &>/dev/null || return 0
+    local f tmp count=0
+    shopt -s nullglob
+    for f in "$EPHEMERAL_PROFILE"/browser-extension-data/*/*.js \
+             "$EPHEMERAL_PROFILE"/browser-extension-data/*/*.json; do
+        [[ -f "$f" ]] || continue
+        jq -e . "$f" >/dev/null 2>&1 || continue
+        tmp="${f}.tmp.$$"
+        if jq --arg re "$EXT_TOKEN_RE" '
+                walk(if type == "object"
+                     then with_entries(select((.key | test($re)) | not))
+                     else . end)
+            ' "$f" > "$tmp" 2>/dev/null; then
+            mv "$tmp" "$f"
+            count=$((count + 1))
+        else
+            rm -f "$tmp"
+        fi
+    done
+    shopt -u nullglob
+    if (( VERBOSE )) && (( count > 0 )); then
+        echo "[Info] Scrubbed token-like fields in $count extension storage file(s)."
+    fi
+}
+sanitize_extension_tokens
+
+# -------------------------------------------------------------------------
 # Fix extension paths for portability
 # -------------------------------------------------------------------------
 if [[ -f "$EPHEMERAL_PROFILE/extensions.json" ]] && [[ -n "$SOURCE_PROFILE" ]]; then
@@ -356,6 +413,8 @@ if [[ -n "$SOURCE_PROFILE" ]] && [[ -f "$SOURCE_PROFILE/places.sqlite" ]]; then
     sqlite3 "$EPHEMERAL_PROFILE/places.sqlite" <<EOSQL
         DELETE FROM moz_historyvisits;
         DELETE FROM moz_inputhistory;
+        DELETE FROM moz_places
+            WHERE id NOT IN (SELECT fk FROM moz_bookmarks WHERE fk IS NOT NULL);
         UPDATE moz_places SET frecency = -1;
         UPDATE moz_places SET visit_count = 0;
         VACUUM;
@@ -368,12 +427,13 @@ fi
 # -------------------------------------------------------------------------
 cat > "$EPHEMERAL_PROFILE/user.js" << 'EOUJS'
 /* --- Startup & Homepage --- */
+user_pref("datareporting.usage.uploadEnabled", false);
 user_pref("browser.startup.page", 0);
 user_pref("browser.startup.homepage", "about:blank");
 user_pref("browser.startup.firstrunSkipsHomepage", true);
 user_pref("browser.startup.homepage_override.mstone", "ignore");
 user_pref("browser.startup.homepage_override.buildID", "ignore");
-user_pref("browser.shell.checkDefaultBrowser ", false);
+user_pref("browser.shell.checkDefaultBrowser", false);
 user_pref("browser.preonboarding.enabled", false);
 user_pref("browser.aboutwelcome.experimentsGate.enabled", false);
 
@@ -400,7 +460,6 @@ user_pref("extensions.update.enabled", false);
 user_pref("extensions.systemAddon.update.enabled", false);
 user_pref("extensions.formautofill.addresses.enabled", false);
 user_pref("extensions.formautofill.creditCards.enabled", false);
-user_pref("extensions.quarantinedDomains.list", "autoatendimento.bb.com.br,ibpf.sicredi.com.br,ibpj.sicredi.com.br,internetbanking.caixa.gov.br,www.ib12.bradesco.com.br,www2.bancobrasil.com.br");
 user_pref("extensions.webcompat.enable_interventions", true);
 user_pref("extensions.webcompat.enable_shims", true);
 user_pref("extensions.webcompat.perform_injections", true);
@@ -448,6 +507,8 @@ user_pref("browser.newtabpage.activity-stream.feeds.section.topstories", false);
 user_pref("browser.newtabpage.activity-stream.discoverystream.enabled", false);
 user_pref("browser.newtabpage.activity-stream.default.sites", "");
 user_pref("browser.newtabpage.activity-stream.telemetry", false);
+user_pref("browser.newtabpage.activity-stream.feeds.telemetry", false);
+user_pref("browser.urlbar.eventTelemetry.enabled", false);
 user_pref("browser.newtab.enabled", false);
 user_pref("browser.pocket.enabled", false);
 user_pref("browser.snippets.enabled", false);
@@ -510,6 +571,7 @@ user_pref("browser.send_pings", false);
 user_pref("permissions.default.geo", 2);
 user_pref("media.peerconnection.enabled", false);
 user_pref("network.http.http3.enable", false);
+user_pref("browser.urlbar.trustPanel.breachAlerts", false);
 
 /* --- Letterboxing --- */
 user_pref("privacy.resistFingerprinting.letterboxing", true);
@@ -540,14 +602,15 @@ user_pref("signon.recipes.remoteRecipes.enabled", false);
 /* --- Network & DNS --- */
 user_pref("network.prefetch-next", false);
 user_pref("network.dns.disablePrefetch", true);
+user_pref("browser.urlbar.speculativeConnect.enabled", false);
 user_pref("network.http.speculative-parallel-limit", 0);
 user_pref("network.dns.disableIPv6", true);
 user_pref("network.connectivity-service.enabled", false);
 user_pref("network.captive-portal-service.enabled", false);
 user_pref("browser.search.geoip.url", "");
 
-/* --- FIX: Remote Settings --- */
-user_pref("services.settings.enabled", true);
+/* --- Remote Settings --- */
+user_pref("services.settings.enabled", false);
 user_pref("services.settings.load_dump", true);
 
 /* --- Proxy Configuration --- */
@@ -558,7 +621,7 @@ user_pref("network.proxy.ssl", "gw");
 user_pref("network.proxy.ssl_port", 31284);
 
 /* --- DNS over HTTPS --- */
-user_pref("network.trr.mode", 4);
+user_pref("network.trr.mode", 5);
 user_pref("network.trr.custom_uri", "https://1.1.1.1/dns-query");
 user_pref("network.trr.confirmation_telemetry_enabled", false);
 
@@ -582,10 +645,20 @@ user_pref("privacy.clearHistory.formdata", true);
 user_pref("privacy.clearHistory.siteSettings", true);
 
 /* --- Media & Hardware --- */
+/* force-enabled=true is required because NVIDIA VA-API via nvidia-vaapi-driver
+   is gfx-blocklisted, and a failed startup self-test sets
+   media.hardware-video-decoding.failed=true, which force-disables HW decode even
+   with force-enabled. Recovery: delete/clear .failed and restart. */
 user_pref("media.hardware-video-decoding.force-enabled", true);
-user_pref("media.hardware-video-decoding.blocklist-allowed", true);
 user_pref("media.ffmpeg.vaapi.enabled", true);
 user_pref("media.rdd-ffmpeg.enabled", true);
+/* SW codec fallbacks deliberately disabled (reduce open-source decoder attack
+   surface in the RDD process; push decode to GPU). Consequence: NO per-codec SW
+   fallback for VP8/VP9/AV1 -> a stream in a codec the GPU cannot HW-decode
+   (notably AV1; GP107 has no AV1 decoder) hard-fails (black/error) instead of
+   silently falling back to SW. If that is ever observed, enable per-codec
+   fallback with:  media.rdd-ffvpx.enabled=true  media.rdd-vpx.enabled=true
+   media.av1.enabled=true   (re-adds fffpx/libvpx/dav1d to the RDD process). */
 user_pref("media.rdd-ffvpx.enabled", false);
 user_pref("media.rdd-vpx.enabled", false);
 user_pref("media.gmp-gmpopenh264.enabled", false);
@@ -608,7 +681,6 @@ user_pref("browser.translation.detectLanguage", false);
 /* --- Accessibility & Display --- */
 user_pref("accessibility.force_disabled", 1);
 user_pref("browser.display.document_color_use", 0);
-user_pref("layout.css.prefers-color-scheme.content-override", 2);
 user_pref("reader.parse-on-load.enabled", false);
 user_pref("layout.spellcheckDefault", 0);
 user_pref("browser.uidensity", 1);
@@ -630,8 +702,10 @@ if [[ -n "$SOURCE_PROFILE" && -f "$SOURCE_PROFILE/prefs.js" ]]; then
     grep -h 'user_pref("browser.uiCustomization.state"' "$SOURCE_PROFILE/prefs.js" 2>/dev/null | sed 's|//.*||' | tr -d '\n' >> "$EPHEMERAL_PROFILE/user.js" || true
     # UI Backup
     grep -h 'user_pref("browser.uiCustomization.horizontalTabsBackup"' "$SOURCE_PROFILE/prefs.js" 2>/dev/null | sed 's|//.*||' | tr -d '\n' >> "$EPHEMERAL_PROFILE/user.js" || true
-    
-    (( VERBOSE )) && echo "[Info] Imported UUIDs and UI Layout from prefs.js."
+    # Extension quarantine list (kept in sync from master; remote updates disabled)
+    grep -h 'user_pref("extensions.quarantinedDomains.list"' "$SOURCE_PROFILE/prefs.js" 2>/dev/null | sed 's|//.*||' | tr -d '\n' >> "$EPHEMERAL_PROFILE/user.js" || true
+
+    (( VERBOSE )) && echo "[Info] Imported UUIDs, UI Layout and quarantine list from prefs.js."
 fi
 
 # -------------------------------------------------------------------------
@@ -741,15 +815,23 @@ fi
 # -------------------------------------------------------------------------
 # Start DBus proxy
 # -------------------------------------------------------------------------
+# Only org.freedesktop.portal.Desktop is a real bus name; the rest are
+# interfaces exposed on it. Grant visibility of the name, then allow only the
+# specific portal interfaces Firefox needs (plus the async Request response and
+# Settings change signals) instead of unrestricted talk.
 xdg-dbus-proxy "$DBUS_SESSION_BUS_ADDRESS" \
     "$TMPFS_RUNTIME/firefox-ephemeral.sock" \
     --filter \
     --own=org.mozilla.firefox.* \
-    --talk=org.freedesktop.portal.FileChooser \
-    --talk=org.freedesktop.portal.OpenURI \
-    --talk=org.freedesktop.portal.Settings \
-    --talk=org.freedesktop.portal.Desktop \
-    --talk=org.freedesktop.portal.Notification >/dev/null 2>&1 &
+    --see=org.freedesktop.portal.Desktop \
+    --call=org.freedesktop.portal.Desktop=org.freedesktop.portal.FileChooser.* \
+    --call=org.freedesktop.portal.Desktop=org.freedesktop.portal.OpenURI.* \
+    --call=org.freedesktop.portal.Desktop=org.freedesktop.portal.Settings.* \
+    --call=org.freedesktop.portal.Desktop=org.freedesktop.portal.Notification.* \
+    --call=org.freedesktop.portal.Desktop=org.freedesktop.portal.Request.* \
+    --broadcast=org.freedesktop.portal.Desktop=org.freedesktop.portal.Request.*@/org/freedesktop/portal/desktop/* \
+    --broadcast=org.freedesktop.portal.Desktop=org.freedesktop.portal.Settings.*@/org/freedesktop/portal/desktop \
+    >/dev/null 2>&1 &
 
 PROXY_PID=$!
 
@@ -780,21 +862,33 @@ detect_firefox() {
     command -v firefox-esr &>/dev/null && candidates+=("$(command -v firefox-esr)")
     command -v firefox-bin &>/dev/null && candidates+=("$(command -v firefox-bin)")
 
+    local cmd_path resolved_path file_type is_wrapper found_binary bin_path
     for cmd_path in "${candidates[@]}"; do
         [[ -e "$cmd_path" ]] || continue
-        
-        local resolved_path="$cmd_path"
+
+        resolved_path="$cmd_path"
         [[ -L "$resolved_path" ]] && resolved_path=$(readlink -f "$resolved_path")
+        [[ -n "$resolved_path" && -x "$resolved_path" ]] || resolved_path="$cmd_path"
 
-        local file_type=$(file -b "$resolved_path")
-        local is_wrapper=false
-
+        file_type=$(file -b "$resolved_path")
+        is_wrapper=false
         if [[ "$file_type" == *"script"* || "$file_type" == *"text"* ]]; then
             is_wrapper=true
         fi
 
-        local found_binary=""
+        # A real (non-wrapper) binary resolved from PATH is authoritative.
+        if [[ "$is_wrapper" == false ]]; then
+            MOZ_INSTALL_DIR=$(dirname "$resolved_path")
+            MOZ_LAUNCHER="$resolved_path"
+            return 0
+        fi
+
+        # Otherwise search well-known locations, preferring ones next to the
+        # resolved wrapper before falling back to the fixed list.
+        found_binary=""
         local search_paths=(
+            "$(dirname "$resolved_path")/firefox"
+            "$(dirname "$cmd_path")/firefox"
             "/usr/lib64/firefox/firefox"
             "/usr/lib/firefox/firefox"
             "/opt/firefox/firefox-bin"
@@ -805,6 +899,9 @@ detect_firefox() {
         )
 
         for bin_path in "${search_paths[@]}"; do
+            [[ -n "$bin_path" ]] || continue
+            # Never select the wrapper script itself as the binary.
+            [[ "$bin_path" == "$resolved_path" || "$bin_path" == "$cmd_path" ]] && continue
             if [[ -x "$bin_path" ]]; then
                 found_binary="$bin_path"
                 break
@@ -813,11 +910,7 @@ detect_firefox() {
 
         if [[ -n "$found_binary" ]]; then
             MOZ_INSTALL_DIR=$(dirname "$found_binary")
-            if [[ "$is_wrapper" == true ]]; then
-                MOZ_LAUNCHER="$cmd_path"
-            else
-                MOZ_LAUNCHER="$found_binary"
-            fi
+            MOZ_LAUNCHER="$cmd_path"
             return 0
         fi
     done
@@ -858,19 +951,20 @@ printf '%s' "$machine_id" > "$TMPFS_RUNTIME/machine-id"
     domains=(
         "firefox.settings.services.mozilla.com"
         "firefox-settings-attachments.cdn.mozilla.net"
-        "content-signature-2.cdn.mozilla.com"
+        "content-signature-2.cdn.mozilla.net"
         "services.addons.mozilla.org"
         "blocklists.settings.mozilla.com"
         "aus5.mozilla.org"
         "location.services.mozilla.com"
         "detectportal.firefox.com"
         "tiles.services.mozilla.com"
-        "shavar.services.mozilla.com"
+        "shavar.services.mozilla.org"
         "push.services.mozilla.org"
         "telemetry.mozilla.org"
         "incoming.telemetry.mozilla.org"
         "performance.mozilla.org"
         "tracking-protection.cdn.mozilla.net"
+	"darkreader.org"
     )
 
     # Block for both IPv4 and IPv6
@@ -996,7 +1090,7 @@ if [[ "$HAS_NVIDIA" == true ]]; then
     )
     
     if [[ -n "$NVIDIA_LIB_PATH" ]]; then
-        BWRAP_GPU_ENV+=(--setenv LD_LIBRARY_PATH "$NVIDIA_LIB_PATH:\$LD_LIBRARY_PATH")
+        BWRAP_GPU_ENV+=(--setenv LD_LIBRARY_PATH "$NVIDIA_LIB_PATH:${LD_LIBRARY_PATH:-}")
         (( VERBOSE )) && echo "Injecting Nvidia Library Path: $NVIDIA_LIB_PATH"
     fi
     [[ -n "$NVIDIA_VA_PATH" ]] && BWRAP_GPU_ENV+=(--setenv LIBVA_DRIVERS_PATH "$NVIDIA_VA_PATH")
@@ -1213,6 +1307,7 @@ fi
 bwrap \
     --die-with-parent \
     --unshare-ipc \
+    --unshare-pid \
     --unshare-cgroup \
     --unshare-uts \
     --hostname localhost \
