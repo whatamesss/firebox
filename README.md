@@ -77,8 +77,7 @@ Copy the `app-misc` folder into your local repo and install:
 
 The `ebuild ... manifest` step generates the hashes Portage requires.
 
-`app-misc/firebox` is a live ebuild (`-9999`) that tracks `master`; re-run the
-`ebuild ... manifest` and `emerge` steps whenever you update your checkout.
+`app-misc/firebox` is a live ebuild (`-9999`) that tracks `master`.
 There are no tagged releases, hence no versioned ebuild.
 
 ## Usage
