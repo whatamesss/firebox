@@ -21,7 +21,7 @@ RDEPEND="
 	sys-apps/xdg-dbus-proxy
 	dev-db/sqlite
 	net-misc/rsync
-	virtual/awk
+	app-alternatives/awk
 "
 
 src_install() {

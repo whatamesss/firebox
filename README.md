@@ -66,6 +66,7 @@ three launchers into `/usr/bin` and adds an `opencode` convenience symlink:
 
     eselect repository add firebox git https://github.com/whatamesss/firebox.git
     emaint sync -r firebox
+    echo "app-misc/firebox **" >> /etc/portage/package.accept_keywords/firebox
     emerge -av app-misc/firebox
 
 `app-misc/firebox` is a live ebuild (`-9999`) that tracks `master`, so
