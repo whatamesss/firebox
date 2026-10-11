@@ -62,22 +62,30 @@ and `findmnt`, with `jq` and `uuidgen` optional. `firebox-signal` and
 ## Installation
 
 The repository ships a single `app-misc/firebox` package. It installs the three
-launchers into `/usr/bin` and adds an `opencode` convenience symlink. Copy the
-ebuild into your local Gentoo tree and generate its Manifest:
+launchers into `/usr/bin` and adds an `opencode` convenience symlink. Use
+`wget -r` to recursively grab the `app-misc` tree into your local repo,
+`/var/db/repos/local` — which you must create first if you do not already have
+one:
 
-    cp -r app-misc/firebox /var/db/repos/gentoo/app-misc/
-    cd /var/db/repos/gentoo/app-misc/firebox
+    mkdir -p /var/db/repos/local/profiles
+    echo local > /var/db/repos/local/profiles/repo_name
+
+    wget -r -np -nH --cut-dirs=1 -P /var/db/repos/local \
+        https://raw.githubusercontent.com/whatamesss/firebox/master/app-misc/firebox/
+
+Then generate the package Manifest and install it:
+
+    cd /var/db/repos/local/app-misc/firebox
     ebuild firebox-9999.ebuild manifest
-
-The `ebuild ... manifest` step digests the live ebuild (and any AUX/MISC files)
-and writes the results into the local `Manifest`, which Portage requires before
-it will accept the package. Then install it:
-
     echo "app-misc/firebox **" >> /etc/portage/package.accept_keywords/firebox
     emerge -av app-misc/firebox
 
+The `ebuild ... manifest` step digests the live ebuild (and any AUX/MISC files)
+and writes the results into the package's `Manifest`, which Portage requires
+before it will accept the package.
+
 `app-misc/firebox` is a live ebuild (`-9999`) that tracks `master`: re-run the
-copy, `ebuild ... manifest` and `emerge` steps whenever you update your
+`wget -r`, `ebuild ... manifest` and `emerge` steps whenever you update your
 checkout. There are no tagged releases, hence no versioned ebuild.
 
 ## Usage
