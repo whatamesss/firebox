@@ -61,32 +61,25 @@ and `findmnt`, with `jq` and `uuidgen` optional. `firebox-signal` and
 
 ## Installation
 
-The repository ships a single `app-misc/firebox` package. It installs the three
-launchers into `/usr/bin` and adds an `opencode` convenience symlink. Use
-`wget -r` to recursively grab the `app-misc` tree into your local repo,
-`/var/db/repos/local` — which you must create first if you do not already have
-one:
+For convenience the package installs all three launchers into `/usr/bin` (plus
+an `opencode` symlink), but a launcher only runs if the app it wraps is
+installed: `firebox` needs Firefox, `firebox-signal` needs Signal Desktop and
+`firebox-opencode` needs the opencode CLI. Without the app, the launcher simply
+won't run.
 
-    mkdir -p /var/db/repos/local/profiles
-    echo local > /var/db/repos/local/profiles/repo_name
+Copy the `app-misc` folder into your local repo and install:
 
-    wget -r -np -nH --cut-dirs=1 -P /var/db/repos/local \
-        https://raw.githubusercontent.com/whatamesss/firebox/master/app-misc/firebox/
-
-Then generate the package Manifest and install it:
-
+    cp -r app-misc /var/db/repos/local/
     cd /var/db/repos/local/app-misc/firebox
     ebuild firebox-9999.ebuild manifest
     echo "app-misc/firebox **" >> /etc/portage/package.accept_keywords/firebox
     emerge -av app-misc/firebox
 
-The `ebuild ... manifest` step digests the live ebuild (and any AUX/MISC files)
-and writes the results into the package's `Manifest`, which Portage requires
-before it will accept the package.
+The `ebuild ... manifest` step generates the hashes Portage requires.
 
-`app-misc/firebox` is a live ebuild (`-9999`) that tracks `master`: re-run the
-`wget -r`, `ebuild ... manifest` and `emerge` steps whenever you update your
-checkout. There are no tagged releases, hence no versioned ebuild.
+`app-misc/firebox` is a live ebuild (`-9999`) that tracks `master`; re-run the
+`ebuild ... manifest` and `emerge` steps whenever you update your checkout.
+There are no tagged releases, hence no versioned ebuild.
 
 ## Usage
 
