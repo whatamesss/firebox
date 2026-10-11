@@ -67,18 +67,13 @@ installed: `firebox` needs Firefox, `firebox-signal` needs Signal Desktop and
 `firebox-opencode` needs the opencode CLI. Without the app, the launcher simply
 won't run.
 
-Copy the `app-misc` folder into your local repo and install:
+on Gentoo, save the contents of the `app-misc` folder to your local repo:
 
     cp -r app-misc /var/db/repos/local/
     cd /var/db/repos/local/app-misc/firebox
     ebuild firebox-9999.ebuild manifest
     echo "app-misc/firebox **" >> /etc/portage/package.accept_keywords/firebox
     emerge -av app-misc/firebox
-
-The `ebuild ... manifest` step generates the hashes Portage requires.
-
-`app-misc/firebox` is a live ebuild (`-9999`) that tracks `master`.
-There are no tagged releases, hence no versioned ebuild.
 
 ## Usage
 
