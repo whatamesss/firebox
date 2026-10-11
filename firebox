@@ -5,9 +5,12 @@ set -euo pipefail
 # Argument parsing
 # -------------------------------------------------------------------------
 VERBOSE=0
+SHELL_MODE=0
 for arg in "$@"; do
     if [[ "$arg" == "-v" || "$arg" == "--verbose" ]]; then
         VERBOSE=1
+    elif [[ "$arg" == "--shell" ]]; then
+        SHELL_MODE=1
     fi
 done
 
@@ -26,6 +29,7 @@ REMAINING_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -v|--verbose) shift ;;
+        --shell) shift ;;
         *) REMAINING_ARGS+=("$1") ; shift ;;
     esac
 done
@@ -1305,6 +1309,13 @@ fi
 # -------------------------------------------------------------------------
 # Bwrap command construction
 # -------------------------------------------------------------------------
+if (( SHELL_MODE )); then
+    (( VERBOSE )) && echo "[Info] Shell mode: launching bash inside the sandbox."
+    BWRAP_CMD=(bash)
+else
+    BWRAP_CMD=("$MOZ_LAUNCHER" --no-remote --profile "$EPHEMERAL_PROFILE" "$URL" "${REMAINING_ARGS[@]:1}")
+fi
+
 bwrap \
     --die-with-parent \
     --unshare-ipc \
@@ -1409,7 +1420,7 @@ bwrap \
     "${BWRAP_AV[@]}" \
     \
     --chdir "$SANDBOX" \
-    "$MOZ_LAUNCHER" --no-remote --profile "$EPHEMERAL_PROFILE" "$URL" "${REMAINING_ARGS[@]:1}"
+    "${BWRAP_CMD[@]}"
 
 EXIT_CODE=$?
 exit $EXIT_CODE

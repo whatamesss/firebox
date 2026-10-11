@@ -97,8 +97,8 @@ bash
 
 It supports a -v or --verbose flag for debugging output.
 
-6. Testing the sandbox (firebox-shell)
+6. Testing the sandbox (firebox --shell)
 
-firebox-shell opens an interactive bash shell inside the same hardened sandbox as firebox. Use it to test the environment, run utilities, or try other applications under the same isolation (filesystem/PID/IPC namespaces, GPU injection, filtered D-Bus portals, blocked hosts) before trusting them. Launch with:
+Running firebox with --shell opens an interactive bash shell inside the same hardened sandbox, in place of Firefox. Use it to test the environment, run utilities, or try other applications under the same isolation (filesystem/PID/IPC namespaces, GPU injection, filtered D-Bus portals, blocked hosts) before trusting them. Launch with:
 
-     firebox-shell
+     ./firebox --shell

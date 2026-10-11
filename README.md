@@ -8,7 +8,6 @@ detail by its own `*-readme.txt`.
 | Script | Launches | Details |
 | --- | --- | --- |
 | `firebox` | Privacy-hardened, ephemeral Firefox | [`firebox-readme.txt`](firebox-readme.txt) |
-| `firebox-shell` | An interactive shell inside the Firebox sandbox | [`firebox-shell-readme.txt`](firebox-shell-readme.txt) |
 | `firebox-signal` | Signal Desktop | [`firebox-signal-readme.txt`](firebox-signal-readme.txt) |
 | `firebox-opencode` | The opencode CLI | [`firebox-opencode-readme.txt`](firebox-opencode-readme.txt) |
 
@@ -22,14 +21,12 @@ a filtered D-Bus proxy, a custom `/etc/hosts` that blocks telemetry endpoints,
 and auto-detected NVIDIA/AMD/Intel acceleration. Everything is discarded on
 exit.
 
+Run it with `--shell` to build the exact same hardened environment but hand you
+an interactive `bash` instead of a browser. Use that to inspect what is mounted,
+run utilities, or vet other programs under the same isolation before trusting
+them.
+
 → [`firebox-readme.txt`](firebox-readme.txt)
-
-### firebox-shell — a shell inside the Firebox sandbox
-Builds the exact same hardened environment as `firebox` but hands you an
-interactive `bash` instead of a browser. Use it to inspect what is mounted, run
-utilities, or vet other programs under the same isolation before trusting them.
-
-→ [`firebox-shell-readme.txt`](firebox-shell-readme.txt)
 
 ### firebox-signal — sandboxed Signal Desktop
 Runs Signal against an ephemeral `HOME` under `/tmp/sandboxes/signal`, keeping
@@ -65,7 +62,7 @@ and `findmnt`, with `jq` and `uuidgen` optional. `firebox-signal` and
 ## Usage
 
     ./firebox            # ephemeral, hardened Firefox
-    ./firebox-shell      # interactive shell inside the sandbox
+    ./firebox --shell    # interactive shell inside the sandbox
     ./firebox-signal     # sandboxed Signal Desktop
     ./firebox-opencode   # sandboxed opencode CLI
 
