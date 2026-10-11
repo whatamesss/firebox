@@ -113,6 +113,16 @@ cleanup() {
 # Trap on EXIT ensures cleanup runs even on script errors (set -e)
 trap cleanup EXIT INT TERM HUP
 
+# In shell mode, make Ctrl-C inert. bwrap's --new-session detaches the sandbox
+# from the controlling terminal, so a tty interrupt is delivered to *this*
+# process group (firebox and bwrap) rather than to the shell inside. bwrap has
+# no SIGINT handler, so it would die and drag the whole sandbox down with it.
+# Ignoring SIGINT here is inherited through bwrap by the shell, so Ctrl-C no
+# longer tears the session down. Leave with `exit` or by closing the terminal.
+if (( SHELL_MODE )); then
+    trap '' INT
+fi
+
 # -------------------------------------------------------------------------
 # Dependency check (Soft + Hard)
 # -------------------------------------------------------------------------
