@@ -1,9 +1,7 @@
 # Local opencode configuration (not for publishing)
 opencode.json
 
-# Dated backups of firebox (not for publishing)
+# Backup / working copies (not for publishing)
 firebox.aug14
 firebox.oct1
-
-# firebox-signal is not published
-firebox-signal
+firebox-signal.working

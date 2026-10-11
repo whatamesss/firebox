@@ -1,63 +1,78 @@
-# Firebox is a bash script written by robots but carefully and painstakingly refined by me. i would love your input or refinements!
+# Firebox
 
-A security-hardened Bash wrapper for Firefox that launches an ephemeral, sandboxed session using Bubblewrap (`bwrap`). It creates a temporary profile in RAM, injects strict privacy settings, and auto-configures hardware acceleration for NVIDIA, AMD, and Intel GPUs on Wayland.
+A small collection of Bash launchers that run everyday applications inside
+hardened, ephemeral [Bubblewrap](https://github.com/containers/bubblewrap)
+(`bwrap`) sandboxes. Each launcher is self-contained, and each is documented in
+detail by its own `*-readme.txt`.
 
-## Features
-*   **Total Isolation:** Sandboxes filesystem, PID, and IPC namespaces.
-*   **Ephemeral Profile:** Creates a fresh profile in RAM (`/dev/shm`) on every launch. All data is deleted on exit.
-*   **Sanitized Bookmarks:** Imports bookmarks from your master profile while strictly purging all history, cookies, and input history using SQLite.
-*   **Hardened Privacy:** Disables telemetry, ads, tracking, and Pocket via injected `user.js` and `policies.json`.
-*   **Profile Sync:** Automatically imports your installed add-ons, extension storage, toolbar/tab layout, and the extension quarantine list from your main Firefox profile.
-*   **GPU Acceleration:** Auto-detects NVIDIA, AMD, and Intel drivers; handles VA-API and Vulkan dynamically.
-*   **Wayland Native:** Requires a Wayland compositor; no X11 fallback.
+| Script | Launches | Details |
+| --- | --- | --- |
+| `firebox` | Privacy-hardened, ephemeral Firefox | [`firebox-readme.txt`](firebox-readme.txt) |
+| `firebox-shell` | An interactive shell inside the Firebox sandbox | [`firebox-shell-readme.txt`](firebox-shell-readme.txt) |
+| `firebox-signal` | Signal Desktop | [`firebox-signal-readme.txt`](firebox-signal-readme.txt) |
+| `firebox-opencode` | The opencode CLI | [`firebox-opencode-readme.txt`](firebox-opencode-readme.txt) |
 
-## Prerequisites
-*   **OS:** Linux (Wayland session).
-*   **Tools:** `bubblewrap`, `xdg-dbus-proxy`, `rsync`, `awk`, `file`, `sqlite3`, `findmnt`.
-*   **Optional tools:** `jq` (scrubs tokens from synced extension storage), `uuidgen` (random per-session machine-id).
-*   **Browser:** `firefox`, `firefox-esr`, or `firefox-bin`.
+## The scripts
 
-## Installation
+### firebox — sandboxed, ephemeral, privacy-hardened Firefox
+Copies your real profile into a fresh session directory in RAM, strips history
+and cookies from it, injects a strict privacy `user.js` and a locked-down
+`policies.json`, then launches Firefox under `bwrap`: read-only system mounts,
+a filtered D-Bus proxy, a custom `/etc/hosts` that blocks telemetry endpoints,
+and auto-detected NVIDIA/AMD/Intel acceleration. Everything is discarded on
+exit.
 
-    # 1. Save script as 'firebox' and make executable
-    chmod +x firebox
+→ [`firebox-readme.txt`](firebox-readme.txt)
 
-    # 2. Move to bin (optional)
-    sudo mv firebox /usr/local/bin/firebox
+### firebox-shell — a shell inside the Firebox sandbox
+Builds the exact same hardened environment as `firebox` but hands you an
+interactive `bash` instead of a browser. Use it to inspect what is mounted, run
+utilities, or vet other programs under the same isolation before trusting them.
+
+→ [`firebox-shell-readme.txt`](firebox-shell-readme.txt)
+
+### firebox-signal — sandboxed Signal Desktop
+Runs Signal against an ephemeral `HOME` under `/tmp/sandboxes/signal`, keeping
+only `~/.config/Signal` between sessions. A filtered D-Bus proxy is scoped to
+`org.signal.*` and the StatusNotifier/portal interfaces; Wayland, audio, camera
+and CUPS are bound; egress is routed through `proxychains`.
+
+→ [`firebox-signal-readme.txt`](firebox-signal-readme.txt)
+
+### firebox-opencode — sandboxed opencode CLI
+Starts from an empty root and mounts only what a coding session needs: a
+read-only system tree, private `/tmp` and `/dev/shm`, and a handful of
+persistent read-write opencode directories. `HOME` is `/projects`, and the
+session begins in the directory the launcher was invoked from.
+
+→ [`firebox-opencode-readme.txt`](firebox-opencode-readme.txt)
+
+## Shared design
+
+- **Ephemeral by default** — session data lives in RAM (`/dev/shm` or `/tmp`) and is destroyed on exit.
+- **Read-only system** — binaries, libraries and `/etc` are bound read-only; only explicitly listed paths are writable.
+- **Least-privilege D-Bus** — a proxy exposes only the bus names and interfaces each app actually needs.
+- **Wayland-only** — no X11 fallback.
+- **Namespaced** — IPC, PID, cgroup and UTS namespaces are unshared; the hostname is `localhost`.
+
+## Requirements
+
+Linux with a Wayland session, plus `bwrap` (Bubblewrap). Individual scripts add
+their own tools — commonly `xdg-dbus-proxy`, `rsync`, `awk`, `file`, `sqlite3`
+and `findmnt`, with `jq` and `uuidgen` optional. `firebox-signal` and
+`firebox-opencode` also use `proxychains`.
 
 ## Usage
 
-    # Open with blank page
-    firebox
+    ./firebox            # ephemeral, hardened Firefox
+    ./firebox-shell      # interactive shell inside the sandbox
+    ./firebox-signal     # sandboxed Signal Desktop
+    ./firebox-opencode   # sandboxed opencode CLI
 
-    # Open specific URL
-    firebox example.com
+Each script accepts `-v` for verbose launcher tracing.
 
-    # Debug mode
-    firebox -v
+> The `*-readme.txt` files are the authoritative reference for each sandbox —
+> read the matching one for exact behaviour, dependencies and caveats.
 
-## Testing the Sandbox (firebox-shell)
-
-`firebox-shell` opens an interactive `bash` shell *inside* the same hardened
-sandbox as `firebox`. Use it to test the environment, run utilities, or try
-other applications under the same isolation (filesystem/PID/IPC namespaces,
-GPU injection, filtered D-Bus portals, blocked hosts) before trusting them:
-
-    firebox-shell
-
-## Configuration & Persistence
-
-**Important:** Because the sandbox runs in RAM, **all changes made inside a `firebox` session are lost when you close it.** To make persistent changes, use your standard, unsandboxed Firefox instance:
-
-1.  **Add-ons:** Install, update, and configure extensions in your main browser. `firebox` will automatically sync these extensions on the next launch.
-2.  **Layout & Add-on Settings:** Toolbar/tab layout, the horizontal-tab backup, and your extension quarantine list are imported from your main browser at launch.
-3.  **Bookmarks:** Manage your bookmarks in your main browser. `firebox` automatically imports them and strips all associated history/cookies at launch, ensuring a fresh browsing session.
-
-*Note: Network settings are not imported. `firebox` applies its own hardened network configuration (direct connection, DNS-over-HTTPS disabled) and ignores the master profile's proxy/DoH settings.*
-
-*Note: Downloads are not saved to disk. To keep a file, manually copy it to your real `Downloads` folder. you can modify the $SANDBOXES variable near the start of the script but read the warning*
-
-## Troubleshooting
-*   **"WAYLAND_DISPLAY is not set":** Ensure you are running a Wayland session (GNOME, Sway, etc.).
-*   **"Firefox binary not found":** Ensure `firefox`, `firefox-esr`, or `firefox-bin` is in your `$PATH`.
-*   **GPU Issues:** Run with `-v`. The script auto-injects driver paths, but ensure your proprietary/NVIDIA/Mesa drivers are correctly installed system-wide.
+The scripts were written by robots but carefully and painstakingly refined by
+hand. Input and refinements are very welcome.

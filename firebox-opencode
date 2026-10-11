@@ -1,0 +1,222 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# -------------------------------------------------------------------------
+# firebox-opencode — hardened bubblewrap sandbox for opencode
+#
+# opencode runs with HOME=/projects and starts in the directory you invoked
+# the launcher from (when that directory is inside ~/projects). The sandbox
+# starts from an empty root and only exposes:
+#   * read-only system trees (libs, certs, timezone, toolchains, ...)
+#   * a private, ephemeral /tmp and /dev/shm
+#   * read-write, persistent access to exactly:
+#       ~/.opencode
+#       ~/.config/opencode
+#       ~/.cache/opencode
+#       ~/.local/share/opencode
+#       ~/projects           (mounted at /projects, and used as HOME)
+#   * no Wayland, no D-Bus, no GPU, no audio, no X11, no desktop portals.
+# -------------------------------------------------------------------------
+
+# -------------------------------------------------------------------------
+# Argument parsing
+# -------------------------------------------------------------------------
+VERBOSE=0
+OPENCODE_ARGS=()
+for arg in "$@"; do
+    case "$arg" in
+        -v|--verbose) VERBOSE=1 ;;
+        *) OPENCODE_ARGS+=("$arg") ;;
+    esac
+done
+
+if (( VERBOSE )); then
+    set -x
+fi
+
+# -------------------------------------------------------------------------
+# Paths / sanity
+# -------------------------------------------------------------------------
+REAL_HOME="${HOME%/}"
+if [[ -z "$REAL_HOME" || ! -d "$REAL_HOME" ]]; then
+    echo "Error: HOME environment variable not set or invalid." >&2
+    exit 1
+fi
+
+PROJECTS_DIR="$REAL_HOME/projects"
+EXIT_CODE=0
+REAL_USER="${USER:-$(whoami)}"
+
+# Persistent, read-write host directories. Every one must exist.
+PERSISTENT_DIRS=(
+    "$REAL_HOME/.opencode"
+    "$REAL_HOME/.config/opencode"
+    "$REAL_HOME/.cache/opencode"
+    "$REAL_HOME/.local/share/opencode"
+    "$PROJECTS_DIR"
+)
+for dir in "${PERSISTENT_DIRS[@]}"; do
+    if [[ ! -d "$dir" ]]; then
+        echo "Error: Required directory '$dir' not found." >&2
+        exit 1
+    fi
+done
+
+# -------------------------------------------------------------------------
+# Dependency check
+# -------------------------------------------------------------------------
+if ! command -v bwrap &>/dev/null; then
+    echo "Error: Required command 'bwrap' not found" >&2
+    exit 1
+fi
+
+# -------------------------------------------------------------------------
+# Working directory: ~/projects (or the subfolder the launcher was run from)
+# -------------------------------------------------------------------------
+CALLER_PWD="${PWD:-$PROJECTS_DIR}"
+if [[ "$CALLER_PWD" == "$PROJECTS_DIR" ]]; then
+    SANDBOX_CWD="/projects"
+elif [[ "$CALLER_PWD" == "$PROJECTS_DIR/"* ]]; then
+    SANDBOX_CWD="/projects/${CALLER_PWD#"$PROJECTS_DIR/"}"
+else
+    SANDBOX_CWD="/projects"
+fi
+
+# -------------------------------------------------------------------------
+# Read-only system binds
+# -------------------------------------------------------------------------
+BWRAP_LIBS=(
+    --ro-bind /usr/bin /usr/bin
+    --ro-bind-try /bin /bin
+    --ro-bind-try /sbin /sbin
+    --ro-bind-try /usr/sbin /usr/sbin
+    --ro-bind-try /usr/local /usr/local
+    --ro-bind-try /opt /opt
+    --ro-bind-try /usr/lib /usr/lib
+    --ro-bind-try /usr/lib64 /usr/lib64
+    --ro-bind-try /lib /lib
+    --ro-bind-try /lib64 /lib64
+    --ro-bind-try /usr/lib/locale /usr/lib/locale
+)
+
+BWRAP_MULTIARCH=()
+shopt -s nullglob
+for arch_dir in /usr/lib/*-linux-gnu; do
+    [[ -d "$arch_dir" ]] && BWRAP_MULTIARCH+=(--ro-bind "$arch_dir" "$arch_dir")
+done
+shopt -u nullglob
+
+BWRAP_ETC=(
+    --ro-bind-try /etc/ld.so.cache /etc/ld.so.cache
+    --ro-bind-try /etc/ld.so.conf /etc/ld.so.conf
+    --ro-bind-try /etc/ld.so.conf.d /etc/ld.so.conf.d
+    --ro-bind-try /etc/ssl /etc/ssl
+    --ro-bind-try /etc/pki /etc/pki
+    --ro-bind-try /etc/ca-certificates /etc/ca-certificates
+    --ro-bind-try /etc/resolv.conf /etc/resolv.conf
+    --ro-bind-try /etc/nsswitch.conf /etc/nsswitch.conf
+    --ro-bind-try /etc/hosts /etc/hosts
+    --ro-bind-try /etc/passwd /etc/passwd
+    --ro-bind-try /etc/group /etc/group
+    --ro-bind-try /etc/machine-id /etc/machine-id
+    --ro-bind-try /etc/localtime /etc/localtime
+    --ro-bind-try /etc/proxychains.conf /etc/proxychains.conf
+    --ro-bind-try /etc/terminfo /etc/terminfo
+    --ro-bind-try /etc/inputrc /etc/inputrc
+    --ro-bind-try /etc/profile /etc/profile
+    --ro-bind-try /etc/profile.d /etc/profile.d
+    --ro-bind-try /etc/bash.bashrc /etc/bash.bashrc
+    --ro-bind-try /etc/gitconfig /etc/gitconfig
+)
+
+BWRAP_SHARE=(
+    --ro-bind-try /usr/share/zoneinfo /usr/share/zoneinfo
+    --ro-bind-try /usr/share/locale /usr/share/locale
+    --ro-bind-try /usr/share/terminfo /usr/share/terminfo
+    --ro-bind-try /usr/share/misc /usr/share/misc
+    --ro-bind-try /usr/share/ca-certificates /usr/share/ca-certificates
+)
+
+# -------------------------------------------------------------------------
+# Minimal /sys (CPU topology only; no hardware enumeration)
+# -------------------------------------------------------------------------
+BWRAP_SYS=(
+    --tmpfs /sys
+    --ro-bind-try /sys/devices/system/cpu /sys/devices/system/cpu
+)
+
+# -------------------------------------------------------------------------
+# Persistent, read-write binds
+# -------------------------------------------------------------------------
+BWRAP_RW=(
+    --bind "$PROJECTS_DIR" "/projects"
+    --bind "$REAL_HOME/.opencode" "$REAL_HOME/.opencode"
+    --bind "$REAL_HOME/.config/opencode" "$REAL_HOME/.config/opencode"
+    --bind "$REAL_HOME/.cache/opencode" "$REAL_HOME/.cache/opencode"
+    --bind "$REAL_HOME/.local/share/opencode" "$REAL_HOME/.local/share/opencode"
+)
+
+# Read-only convenience: git identity, if present.
+BWRAP_GITCONFIG=()
+if [[ -f "$REAL_HOME/.gitconfig" ]]; then
+    BWRAP_GITCONFIG+=(--ro-bind "$REAL_HOME/.gitconfig" "$REAL_HOME/.gitconfig")
+fi
+
+# -------------------------------------------------------------------------
+# Bwrap command construction
+# -------------------------------------------------------------------------
+bwrap \
+    --die-with-parent \
+    --unshare-ipc \
+    --unshare-pid \
+    --unshare-cgroup \
+    --unshare-uts \
+    --hostname localhost \
+    --new-session \
+    \
+    --proc /proc \
+    --dev /dev \
+    --dev-bind-try /dev/pts /dev/pts \
+    --tmpfs /tmp \
+    --tmpfs /dev/shm \
+    \
+    "${BWRAP_SYS[@]}" \
+    "${BWRAP_LIBS[@]}" \
+    "${BWRAP_MULTIARCH[@]}" \
+    "${BWRAP_SHARE[@]}" \
+    "${BWRAP_ETC[@]}" \
+    \
+    --setenv HOME "/projects" \
+    --setenv XDG_CONFIG_HOME "$REAL_HOME/.config" \
+    --setenv XDG_DATA_HOME "$REAL_HOME/.local/share" \
+    --setenv XDG_CACHE_HOME "$REAL_HOME/.cache" \
+    --setenv XDG_STATE_HOME "$REAL_HOME/.local/state" \
+    --setenv XDG_CONFIG_DIRS "/etc/xdg" \
+    --setenv XDG_RUNTIME_DIR "/tmp" \
+    --setenv PATH "$REAL_HOME/.opencode/bin:$PATH" \
+    --setenv LANG "C.UTF-8" \
+    --setenv LC_ALL "C.UTF-8" \
+    --setenv TMPDIR "/tmp" \
+    --setenv TERM "${TERM:-xterm-256color}" \
+    --setenv USER "$REAL_USER" \
+    --setenv LOGNAME "$REAL_USER" \
+    --setenv SHELL "/bin/bash" \
+    --unsetenv DISPLAY \
+    --unsetenv WAYLAND_DISPLAY \
+    --unsetenv XAUTHORITY \
+    --unsetenv DBUS_SESSION_BUS_ADDRESS \
+    --unsetenv SSH_AUTH_SOCK \
+    --unsetenv GNUPGHOME \
+    --unsetenv GPG_AGENT_INFO \
+    --unsetenv KDE_FULL_SESSION \
+    --unsetenv KDE_SESSION_VERSION \
+    --unsetenv KDE_SESSION_UID \
+    --unsetenv KDE_APPLICATIONS_AS_SCOPE \
+    --unsetenv _KDE_APPLICATIONS_AS_FORKING \
+    \
+    "${BWRAP_RW[@]}" \
+    "${BWRAP_GITCONFIG[@]}" \
+    \
+    --chdir "$SANDBOX_CWD" \
+    proxychains opencode "${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"}" || EXIT_CODE=$?
+exit "$EXIT_CODE"

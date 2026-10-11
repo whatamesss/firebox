@@ -683,6 +683,7 @@ xdg-dbus-proxy "$DBUS_SESSION_BUS_ADDRESS" \
     --filter \
     --own=org.mozilla.firefox.* \
     --see=org.freedesktop.portal.Desktop \
+    --call=org.freedesktop.portal.Desktop=org.freedesktop.DBus.Properties.Get \
     --call=org.freedesktop.portal.Desktop=org.freedesktop.portal.FileChooser.* \
     --call=org.freedesktop.portal.Desktop=org.freedesktop.portal.OpenURI.* \
     --call=org.freedesktop.portal.Desktop=org.freedesktop.portal.Settings.* \
