@@ -74,6 +74,20 @@ printf '%s:x:%s:%s:%s:/projects:/bin/false\n' \
     "$REAL_USER" "$(id -u)" "$(id -g)" "$REAL_USER" > "$OPENCODE_RUNTIME/passwd"
 printf '%s:x:%s:\n' "$REAL_USER" "$(id -g)" > "$OPENCODE_RUNTIME/group"
 
+# TUI keybind overlay: drop Ctrl-C from both app_exit and input_clear so it
+# can no longer quit or clear the prompt; leave the session with /quit (or
+# ctrl+x q). Injected via OPENCODE_TUI_CONFIG, which opencode merges on top
+# of the normal tui.json.
+cat > "$OPENCODE_RUNTIME/tui.json" << 'EOF'
+{
+  "$schema": "https://opencode.ai/tui.json",
+  "keybinds": {
+    "app_exit": "ctrl+d,<leader>q",
+    "input_clear": "none"
+  }
+}
+EOF
+
 # Persistent, read-write host directories. Every one must exist.
 PERSISTENT_DIRS=(
     "$REAL_HOME/.opencode"
@@ -179,6 +193,7 @@ BWRAP_ETC=(
     --ro-bind-try /etc/gitconfig /etc/gitconfig
     --ro-bind "$OPENCODE_RUNTIME/passwd" /etc/passwd
     --ro-bind "$OPENCODE_RUNTIME/group" /etc/group
+    --ro-bind "$OPENCODE_RUNTIME/tui.json" /etc/opencode-tui.json
 )
 
 # Bind proxychains' config at its native path so the binary finds it.
@@ -261,6 +276,7 @@ bwrap \
     --setenv XDG_CONFIG_DIRS "/etc/xdg" \
     --setenv XDG_RUNTIME_DIR "/tmp" \
     --setenv PATH "$REAL_HOME/.opencode/bin:$PATH" \
+    --setenv OPENCODE_TUI_CONFIG "/etc/opencode-tui.json" \
     --setenv LANG "C.UTF-8" \
     --setenv LC_ALL "C.UTF-8" \
     --setenv TMPDIR "/tmp" \

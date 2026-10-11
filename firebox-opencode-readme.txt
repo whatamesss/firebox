@@ -77,6 +77,9 @@ throwaway tmpfs.
 
 6. Notes / Limitations
 
+     Ctrl-C is disabled inside the sandbox (via a TUI keybind overlay set with
+     OPENCODE_TUI_CONFIG), so it cannot quit the session or clear the prompt.
+     Exit with /quit (or ctrl+x q, or ctrl+d).
      --new-session detaches the controlling terminal, so terminal resizes may
      not reflow until the session restarts. Remove that flag if this is a
      problem.
