@@ -218,5 +218,5 @@ bwrap \
     "${BWRAP_GITCONFIG[@]}" \
     \
     --chdir "$SANDBOX_CWD" \
-    proxychains opencode "${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"}" || EXIT_CODE=$?
+    proxychains -q opencode "${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"}" || EXIT_CODE=$?
 exit "$EXIT_CODE"

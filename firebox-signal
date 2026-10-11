@@ -668,6 +668,6 @@ bwrap \
     "${BWRAP_AV[@]}" \
     \
     --chdir "$SANDBOX" \
-proxychains signal-desktop --use-webgpu-adapter=opengles
+proxychains -q signal-desktop --use-webgpu-adapter=opengles
 EXIT_CODE=$?
 exit $EXIT_CODE

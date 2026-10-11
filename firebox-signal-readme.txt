@@ -78,4 +78,4 @@ created during the session is discarded when Signal exits.
      when Signal closes.
      A Wayland session is required; the sandbox has no X11 fallback.
      Signal is launched as:
-          proxychains signal-desktop --use-webgpu-adapter=opengles
+          proxychains -q signal-desktop --use-webgpu-adapter=opengles
