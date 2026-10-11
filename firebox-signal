@@ -7,10 +7,12 @@ fi
 # Argument parsing
 # -------------------------------------------------------------------------
 VERBOSE=0
+NO_PROXY=0
 for arg in "$@"; do
-    if [[ "$arg" == "-v" || "$arg" == "--verbose" ]]; then
-        VERBOSE=1
-    fi
+    case "$arg" in
+        -v|--verbose) VERBOSE=1 ;;
+        --no-proxy) NO_PROXY=1 ;;
+    esac
 done
 
 if (( VERBOSE )); then
@@ -18,6 +20,10 @@ if (( VERBOSE )); then
 fi
 
 cd "${HOME:-}" || { echo "Error: HOME environment variable not set." >&2; exit 1; }
+
+# Fall back to the standard per-user runtime dir if unset (set -u safety and
+# portability across init systems).
+XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 
 # -------------------------------------------------------------------------
 # URL handling
@@ -28,6 +34,7 @@ REMAINING_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -v|--verbose) shift ;;
+        --no-proxy) shift ;;
         *) REMAINING_ARGS+=("$1") ; shift ;;
     esac
 done
@@ -124,6 +131,51 @@ for cmd in uuidgen jq; do
 done
 
 # -------------------------------------------------------------------------
+# proxychains detection (optional; named proxychains4 on Debian/Ubuntu)
+# -------------------------------------------------------------------------
+PROXYCHAINS_BIN=""
+if (( ! NO_PROXY )); then
+    for pc in proxychains proxychains4; do
+        if command -v "$pc" &>/dev/null; then
+            PROXYCHAINS_BIN="$pc"
+            break
+        fi
+    done
+fi
+
+PROXYCHAINS_CONF=""
+if [[ -n "$PROXYCHAINS_BIN" ]]; then
+    for pc_conf in /etc/proxychains.conf /etc/proxychains4.conf; do
+        if [[ -f "$pc_conf" ]]; then
+            PROXYCHAINS_CONF="$pc_conf"
+            break
+        fi
+    done
+elif (( NO_PROXY )); then
+    (( VERBOSE )) && echo "[Info] proxychains disabled via --no-proxy." >&2
+else
+    echo "Warning: 'proxychains' not found; running without proxy chaining." >&2
+fi
+BWRAP_PROXYCHAINS=()
+if [[ -n "$PROXYCHAINS_CONF" ]]; then
+    BWRAP_PROXYCHAINS+=(--ro-bind "$PROXYCHAINS_CONF" "$PROXYCHAINS_CONF")
+fi
+
+# -------------------------------------------------------------------------
+# Signal install directory detection (usually /opt/Signal)
+# -------------------------------------------------------------------------
+SIGNAL_BIN=$(command -v signal-desktop 2>/dev/null || true)
+SIGNAL_INSTALL_DIR=""
+if [[ -n "$SIGNAL_BIN" ]]; then
+    SIGNAL_RESOLVED=$(readlink -f -- "$SIGNAL_BIN" 2>/dev/null || echo "$SIGNAL_BIN")
+    SIGNAL_INSTALL_DIR=$(dirname "$SIGNAL_RESOLVED")
+fi
+BWRAP_SIGNAL=()
+if [[ -n "$SIGNAL_INSTALL_DIR" && -d "$SIGNAL_INSTALL_DIR" ]]; then
+    BWRAP_SIGNAL+=(--ro-bind-try "$SIGNAL_INSTALL_DIR" "$SIGNAL_INSTALL_DIR")
+fi
+
+# -------------------------------------------------------------------------
 # Wayland check
 # -------------------------------------------------------------------------
 if [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
@@ -166,8 +218,17 @@ export FONTCONFIG_PATH=/etc/fonts
 export FONTCONFIG_FILE=/etc/fonts/fonts.conf
 [[ "${XDG_CURRENT_DESKTOP:-}" == "GNOME" ]] && export GNOME_DISABLE_CRASH_DIALOG=1
 
-# Force C.UTF-8 to prevent bash/locale warnings regardless of system config
-SYSTEM_LOCALE="C.UTF-8"
+# Pick an available UTF-8 locale to prevent bash/locale warnings regardless of
+# system config. C.UTF-8 is built into modern glibc but absent on older/musl
+# systems, so fall back gracefully.
+SYSTEM_LOCALE=""
+for loc in C.UTF-8 C.utf8 en_US.UTF-8 en_US.utf8; do
+    if locale -a 2>/dev/null | grep -qix "${loc//./\\.}"; then
+        SYSTEM_LOCALE="$loc"
+        break
+    fi
+done
+SYSTEM_LOCALE="${SYSTEM_LOCALE:-C}"
 (( VERBOSE )) && echo "System Locale set to: $SYSTEM_LOCALE"
 
 # -------------------------------------------------------------------------
@@ -322,12 +383,16 @@ fi
 BWRAP_GPU_ENV=()
 find_va_driver_path() {
     local driver="$1"
+    # Covers Fedora/openSUSE (/usr/lib64), Arch/others (/usr/lib) and every
+    # Debian multiarch tuple (/usr/lib/<tuple>), across architectures.
     if [[ "$driver" == "nvidia" ]]; then
-        for path in /usr/lib64/va/drivers /usr/lib/va/drivers /usr/lib/x86_64-linux-gnu/va/drivers /usr/lib64/dri /usr/lib/dri /usr/lib/x86_64-linux-gnu/dri; do
+        for path in /usr/lib64/va/drivers /usr/lib/va/drivers /usr/lib/*-linux-gnu*/va/drivers \
+                    /usr/lib64/dri /usr/lib/dri /usr/lib/*-linux-gnu*/dri; do
             [[ -f "$path/nvidia_drv_video.so" ]] && echo "$path" && return 0
         done
-       else
-        for path in /usr/lib64/dri /usr/lib/dri /usr/lib/x86_64-linux-gnu/dri /usr/lib/aarch64-linux-gnu/dri /usr/lib64/va/drivers /usr/lib/va/drivers; do
+    else
+        for path in /usr/lib64/dri /usr/lib/dri /usr/lib/*-linux-gnu*/dri \
+                    /usr/lib64/va/drivers /usr/lib/va/drivers /usr/lib/*-linux-gnu*/va/drivers; do
             [[ -f "$path/${driver}_drv_video.so" ]] && echo "$path" && return 0
         done
     fi
@@ -336,11 +401,15 @@ find_va_driver_path() {
 
 NVIDIA_LIB_PATH=""
 if [[ "$HAS_NVIDIA" == true ]]; then
-    if [[ -f "/usr/lib64/libEGL_nvidia.so.0" ]]; then
-        NVIDIA_LIB_PATH="/usr/lib64"
-    elif [[ -d "/usr/lib64/nvidia" ]]; then
-        NVIDIA_LIB_PATH="/usr/lib64/nvidia"
-    fi
+    for cand in /usr/lib64 /usr/lib/*-linux-gnu*; do
+        if [[ -f "$cand/libEGL_nvidia.so.0" ]]; then
+            NVIDIA_LIB_PATH="$cand"
+            break
+        elif [[ -d "$cand/nvidia" ]]; then
+            NVIDIA_LIB_PATH="$cand/nvidia"
+            break
+        fi
+    done
 
     NVIDIA_VA_PATH=$(find_va_driver_path nvidia)
     BWRAP_GPU_ENV=(
@@ -566,6 +635,12 @@ fi
 # -------------------------------------------------------------------------
 # Bwrap command construction
 # -------------------------------------------------------------------------
+if [[ -n "$PROXYCHAINS_BIN" ]]; then
+    BWRAP_CMD=("$PROXYCHAINS_BIN" -q signal-desktop --use-webgpu-adapter=opengles)
+else
+    BWRAP_CMD=(signal-desktop --use-webgpu-adapter=opengles)
+fi
+
 bwrap \
     --die-with-parent \
     --unshare-ipc \
@@ -605,6 +680,9 @@ bwrap \
     --unsetenv CONFIG_PROTECT \
     --unsetenv PKG_CONFIG_PATH \
     --unsetenv NVD_BACKEND \
+    --unsetenv LD_PRELOAD \
+    --unsetenv PROXYCHAINS_CONF_FILE \
+    --unsetenv PROXYCHAINS_QUIET_MODE \
     ${BWRAP_IM[@]} \
     "${BWRAP_GPU_ENV[@]}" \
     \
@@ -637,22 +715,22 @@ bwrap \
     --ro-bind-try /usr/share/vulkan /usr/share/vulkan \
     \
     --ro-bind-try /etc/ssl /etc/ssl \
-    --ro-bind /etc/resolv.conf /etc/resolv.conf \
+    --ro-bind-try /etc/resolv.conf /etc/resolv.conf \
     --ro-bind "$TMPFS_RUNTIME/passwd" /etc/passwd \
     --ro-bind "$TMPFS_RUNTIME/group" /etc/group \
     --ro-bind "$TMPFS_RUNTIME/hosts" /etc/hosts \
     --ro-bind "$TMPFS_RUNTIME/machine-id" /etc/machine-id \
     --ro-bind-try /etc/nsswitch.conf /etc/nsswitch.conf \
     "${BWRAP_PRINT[@]}" \
-    --ro-bind /etc/ld.so.cache /etc/ld.so.cache \
-    --ro-bind /etc/ld.so.conf /etc/ld.so.conf \
-    --ro-bind /etc/ld.so.conf.d /etc/ld.so.conf.d \
-    --ro-bind /etc/fonts /etc/fonts \
+    --ro-bind-try /etc/ld.so.cache /etc/ld.so.cache \
+    --ro-bind-try /etc/ld.so.conf /etc/ld.so.conf \
+    --ro-bind-try /etc/ld.so.conf.d /etc/ld.so.conf.d \
+    --ro-bind-try /etc/fonts /etc/fonts \
     --ro-bind-try /var/cache/fontconfig /var/cache/fontconfig \
-    --ro-bind /usr/share/zoneinfo /usr/share/zoneinfo \
-    --ro-bind /etc/localtime /etc/localtime \
-    --ro-bind /opt/Signal /opt/Signal \
-    --ro-bind /etc/proxychains.conf /etc/proxychains.conf \
+    --ro-bind-try /usr/share/zoneinfo /usr/share/zoneinfo \
+    --ro-bind-try /etc/localtime /etc/localtime \
+    "${BWRAP_SIGNAL[@]}" \
+    "${BWRAP_PROXYCHAINS[@]}" \
     \
     "${BWRAP_SYS[@]}" \
     --tmpfs "$SANDBOX/.config" \
@@ -668,6 +746,6 @@ bwrap \
     "${BWRAP_AV[@]}" \
     \
     --chdir "$SANDBOX" \
-proxychains -q signal-desktop --use-webgpu-adapter=opengles
+"${BWRAP_CMD[@]}"
 EXIT_CODE=$?
 exit $EXIT_CODE

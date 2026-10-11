@@ -22,10 +22,12 @@ set -euo pipefail
 # Argument parsing
 # -------------------------------------------------------------------------
 VERBOSE=0
+NO_PROXY=0
 OPENCODE_ARGS=()
 for arg in "$@"; do
     case "$arg" in
         -v|--verbose) VERBOSE=1 ;;
+        --no-proxy) NO_PROXY=1 ;;
         *) OPENCODE_ARGS+=("$arg") ;;
     esac
 done
@@ -46,6 +48,31 @@ fi
 PROJECTS_DIR="$REAL_HOME/projects"
 EXIT_CODE=0
 REAL_USER="${USER:-$(whoami)}"
+
+# Synthetic /etc/passwd and /etc/group (never the host's), so the sandbox
+# exposes only the launching user and no real host account list.
+OPENCODE_RUNTIME=""
+if [[ -d /dev/shm ]]; then
+    OPENCODE_RUNTIME=$(mktemp -d /dev/shm/opencode-runtime.XXXXXX 2>/dev/null || true)
+fi
+if [[ -z "$OPENCODE_RUNTIME" ]]; then
+    OPENCODE_RUNTIME=$(mktemp -d /tmp/opencode-runtime.XXXXXX)
+fi
+if [[ -z "$OPENCODE_RUNTIME" || ! -d "$OPENCODE_RUNTIME" ]]; then
+    echo "Error: Failed to create runtime directory in /dev/shm or /tmp." >&2
+    exit 1
+fi
+cleanup() {
+    if [[ -n "${OPENCODE_RUNTIME:-}" && -d "$OPENCODE_RUNTIME" ]]; then
+        rm -rf "$OPENCODE_RUNTIME"
+    fi
+    return 0
+}
+trap cleanup EXIT INT TERM HUP
+
+printf '%s:x:%s:%s:%s:/projects:/bin/false\n' \
+    "$REAL_USER" "$(id -u)" "$(id -g)" "$REAL_USER" > "$OPENCODE_RUNTIME/passwd"
+printf '%s:x:%s:\n' "$REAL_USER" "$(id -g)" > "$OPENCODE_RUNTIME/group"
 
 # Persistent, read-write host directories. Every one must exist.
 PERSISTENT_DIRS=(
@@ -68,6 +95,31 @@ done
 if ! command -v bwrap &>/dev/null; then
     echo "Error: Required command 'bwrap' not found" >&2
     exit 1
+fi
+
+# proxychains is optional (named proxychains4 on Debian/Ubuntu).
+PROXYCHAINS_BIN=""
+if (( ! NO_PROXY )); then
+    for pc in proxychains proxychains4; do
+        if command -v "$pc" &>/dev/null; then
+            PROXYCHAINS_BIN="$pc"
+            break
+        fi
+    done
+fi
+
+PROXYCHAINS_CONF=""
+if [[ -n "$PROXYCHAINS_BIN" ]]; then
+    for pc_conf in /etc/proxychains.conf /etc/proxychains4.conf; do
+        if [[ -f "$pc_conf" ]]; then
+            PROXYCHAINS_CONF="$pc_conf"
+            break
+        fi
+    done
+elif (( NO_PROXY )); then
+    (( VERBOSE )) && echo "[Info] proxychains disabled via --no-proxy." >&2
+else
+    echo "Warning: 'proxychains' not found; running without proxy chaining." >&2
 fi
 
 # -------------------------------------------------------------------------
@@ -117,18 +169,22 @@ BWRAP_ETC=(
     --ro-bind-try /etc/resolv.conf /etc/resolv.conf
     --ro-bind-try /etc/nsswitch.conf /etc/nsswitch.conf
     --ro-bind-try /etc/hosts /etc/hosts
-    --ro-bind-try /etc/passwd /etc/passwd
-    --ro-bind-try /etc/group /etc/group
     --ro-bind-try /etc/machine-id /etc/machine-id
     --ro-bind-try /etc/localtime /etc/localtime
-    --ro-bind-try /etc/proxychains.conf /etc/proxychains.conf
     --ro-bind-try /etc/terminfo /etc/terminfo
     --ro-bind-try /etc/inputrc /etc/inputrc
     --ro-bind-try /etc/profile /etc/profile
     --ro-bind-try /etc/profile.d /etc/profile.d
     --ro-bind-try /etc/bash.bashrc /etc/bash.bashrc
     --ro-bind-try /etc/gitconfig /etc/gitconfig
+    --ro-bind "$OPENCODE_RUNTIME/passwd" /etc/passwd
+    --ro-bind "$OPENCODE_RUNTIME/group" /etc/group
 )
+
+# Bind proxychains' config at its native path so the binary finds it.
+if [[ -n "$PROXYCHAINS_CONF" ]]; then
+    BWRAP_ETC+=(--ro-bind "$PROXYCHAINS_CONF" "$PROXYCHAINS_CONF")
+fi
 
 BWRAP_SHARE=(
     --ro-bind-try /usr/share/zoneinfo /usr/share/zoneinfo
@@ -170,6 +226,12 @@ fi
 # -------------------------------------------------------------------------
 # Bwrap command construction
 # -------------------------------------------------------------------------
+if [[ -n "$PROXYCHAINS_BIN" ]]; then
+    BWRAP_CMD=("$PROXYCHAINS_BIN" -q opencode "${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"}")
+else
+    BWRAP_CMD=(opencode "${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"}")
+fi
+
 bwrap \
     --die-with-parent \
     --unshare-ipc \
@@ -218,11 +280,14 @@ bwrap \
     --unsetenv KDE_SESSION_UID \
     --unsetenv KDE_APPLICATIONS_AS_SCOPE \
     --unsetenv _KDE_APPLICATIONS_AS_FORKING \
+    --unsetenv LD_PRELOAD \
+    --unsetenv PROXYCHAINS_CONF_FILE \
+    --unsetenv PROXYCHAINS_QUIET_MODE \
     \
     "${BWRAP_RW[@]}" \
     "${BWRAP_GITCONFIG[@]}" \
     "${BWRAP_GITENV[@]}" \
     \
     --chdir "$SANDBOX_CWD" \
-    proxychains -q opencode "${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"}" || EXIT_CODE=$?
+    "${BWRAP_CMD[@]}" || EXIT_CODE=$?
 exit "$EXIT_CODE"

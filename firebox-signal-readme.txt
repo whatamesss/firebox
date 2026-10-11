@@ -55,15 +55,15 @@ created during the session is discarded when Signal exits.
           the identity files are regenerated per session.
 
      Network:
-          The network namespace is not unshared; egress is routed through
-          proxychains.
+          The network namespace is not unshared. If proxychains is present,
+          egress is routed through it; otherwise Signal connects directly.
 
 4. Dependencies
 
      bwrap (Bubblewrap)
      xdg-dbus-proxy
      findmnt
-     proxychains
+     proxychains (optional; proxychains4 on Debian/Ubuntu)
      uuidgen (optional; random per-session machine-id)
      jq (optional; degraded features if absent)
 
@@ -71,6 +71,7 @@ created during the session is discarded when Signal exits.
 
      ./firebox-signal        # launch Signal Desktop in the sandbox
      ./firebox-signal -v     # verbose launcher tracing (set -x)
+     ./firebox-signal --no-proxy   # ignore proxychains and connect directly
 
 6. Notes / Limitations
 
@@ -79,3 +80,5 @@ created during the session is discarded when Signal exits.
      A Wayland session is required; the sandbox has no X11 fallback.
      Signal is launched as:
           proxychains -q signal-desktop --use-webgpu-adapter=opengles
+     When proxychains is absent (or --no-proxy is given), the proxychains
+     prefix is omitted.

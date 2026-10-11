@@ -59,13 +59,13 @@ throwaway tmpfs.
           configuration and data.
 
      Network:
-          The network namespace is not unshared; egress is routed through
-          proxychains.
+          The network namespace is not unshared. If proxychains is present,
+          egress is routed through it; otherwise opencode connects directly.
 
 4. Dependencies
 
      bwrap (Bubblewrap)
-     proxychains
+     proxychains (optional; proxychains4 on Debian/Ubuntu)
      opencode (expected at ~/.opencode/bin/opencode)
 
 5. Usage
@@ -73,14 +73,15 @@ throwaway tmpfs.
      ./firebox-opencode              # start in /projects (or the current subfolder)
      ./firebox-opencode [args...]    # additional arguments are forwarded to opencode
      ./firebox-opencode -v           # verbose launcher tracing (set -x)
+     ./firebox-opencode --no-proxy   # ignore proxychains and connect directly
 
 6. Notes / Limitations
 
      --new-session detaches the controlling terminal, so terminal resizes may
      not reflow until the session restarts. Remove that flag if this is a
      problem.
-     The host /etc/passwd and /etc/group are bound read-only, so real usernames
-     are visible (but no secrets are exposed).
+     /etc/passwd and /etc/group are synthesised per session, so only the
+     launching user is visible and no real host account list is exposed.
      Because XDG_* point at the real host directories, only the opencode
      subdirectories exist inside the sandbox; other applications' config
      directories are not writable.

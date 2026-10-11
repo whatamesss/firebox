@@ -32,7 +32,7 @@ them.
 Runs Signal against an ephemeral `HOME` under `/tmp/sandboxes/signal`, keeping
 only `~/.config/Signal` between sessions. A filtered D-Bus proxy is scoped to
 `org.signal.*` and the StatusNotifier/portal interfaces; Wayland, audio, camera
-and CUPS are bound; egress is routed through `proxychains`.
+and CUPS are bound; egress is routed through `proxychains` when available.
 
 → [`firebox-signal-readme.txt`](firebox-signal-readme.txt)
 
@@ -57,7 +57,7 @@ session begins in the directory the launcher was invoked from.
 Linux with a Wayland session, plus `bwrap` (Bubblewrap). Individual scripts add
 their own tools — commonly `xdg-dbus-proxy`, `rsync`, `awk`, `file`, `sqlite3`
 and `findmnt`, with `jq` and `uuidgen` optional. `firebox-signal` and
-`firebox-opencode` also use `proxychains`.
+`firebox-opencode` also use `proxychains` when it is installed.
 
 ## Usage
 
