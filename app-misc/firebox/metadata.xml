@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<maintainer type="person">
+		<email>whatamesss@users.noreply.github.com</email>
+		<name>whatamesss</name>
+	</maintainer>
+	<longdescription lang="en">
+		A small collection of Bash launchers that run everyday applications
+		inside hardened, ephemeral Bubblewrap (bwrap) sandboxes. The scripts
+		are installed as firebox, firebox-signal and firebox-opencode, with
+		an additional opencode convenience symlink.
+	</longdescription>
+	<upstream>
+		<remote-id type="github">whatamesss/firebox</remote-id>
+	</upstream>
+</pkgmetadata>

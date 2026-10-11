@@ -59,6 +59,19 @@ their own tools — commonly `xdg-dbus-proxy`, `rsync`, `awk`, `file`, `sqlite3`
 and `findmnt`, with `jq` and `uuidgen` optional. `firebox-signal` and
 `firebox-opencode` also use `proxychains` when it is installed.
 
+## Installation
+
+The repository doubles as a self-hosted Gentoo ebuild overlay. It installs the
+three launchers into `/usr/bin` and adds an `opencode` convenience symlink:
+
+    eselect repository add firebox git https://github.com/whatamesss/firebox.git
+    emaint sync -r firebox
+    emerge -av app-misc/firebox
+
+`app-misc/firebox` is a live ebuild (`-9999`) that tracks `master`, so
+re-running `emaint sync -r firebox && emerge -av app-misc/firebox` updates the
+scripts. There are no tagged releases, hence no versioned ebuild.
+
 ## Usage
 
     ./firebox            # ephemeral, hardened Firefox
