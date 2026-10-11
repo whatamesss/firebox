@@ -31,11 +31,12 @@ throwaway tmpfs.
           ~/.gitconfig is bound read-only, if present (git identity).
 
      Read-only system:
-          /usr, /bin, /sbin, libs and multiarch directories, /usr/local, /opt,
-          /usr/share data (zoneinfo, locale, terminfo, CA certificates), and
-          selected /etc files (ld.so cache/conf, SSL certificates,
-          resolv.conf, nsswitch.conf, hosts, passwd/group, machine-id,
-          localtime, proxychains.conf, profile files).
+          /usr, /bin, /sbin, /usr/libexec/git-core (git's real binaries), libs
+          and multiarch directories, /usr/local, /opt, /usr/share data (zoneinfo,
+          locale, terminfo, git-core templates, CA certificates), and selected
+          /etc files (ld.so cache/conf, SSL certificates, resolv.conf,
+          nsswitch.conf, hosts, passwd/group, machine-id, localtime,
+          proxychains.conf, gitconfig, profile files).
 
      Ephemeral scratch:
           A private tmpfs /tmp and /dev/shm, with TMPDIR pointed at /tmp. Tool

@@ -87,6 +87,7 @@ fi
 # -------------------------------------------------------------------------
 BWRAP_LIBS=(
     --ro-bind /usr/bin /usr/bin
+    --ro-bind-try /usr/libexec/git-core /usr/libexec/git-core
     --ro-bind-try /bin /bin
     --ro-bind-try /sbin /sbin
     --ro-bind-try /usr/sbin /usr/sbin
@@ -131,6 +132,7 @@ BWRAP_ETC=(
 
 BWRAP_SHARE=(
     --ro-bind-try /usr/share/zoneinfo /usr/share/zoneinfo
+    --ro-bind-try /usr/share/git-core /usr/share/git-core
     --ro-bind-try /usr/share/locale /usr/share/locale
     --ro-bind-try /usr/share/terminfo /usr/share/terminfo
     --ro-bind-try /usr/share/misc /usr/share/misc
@@ -156,10 +158,13 @@ BWRAP_RW=(
     --bind "$REAL_HOME/.local/share/opencode" "$REAL_HOME/.local/share/opencode"
 )
 
-# Read-only convenience: git identity, if present.
+# Read-only convenience: git identity, if present. Because HOME is /projects
+# rather than the real home, point git straight at the bound config file.
 BWRAP_GITCONFIG=()
+BWRAP_GITENV=()
 if [[ -f "$REAL_HOME/.gitconfig" ]]; then
     BWRAP_GITCONFIG+=(--ro-bind "$REAL_HOME/.gitconfig" "$REAL_HOME/.gitconfig")
+    BWRAP_GITENV+=(--setenv GIT_CONFIG_GLOBAL "$REAL_HOME/.gitconfig")
 fi
 
 # -------------------------------------------------------------------------
@@ -216,6 +221,7 @@ bwrap \
     \
     "${BWRAP_RW[@]}" \
     "${BWRAP_GITCONFIG[@]}" \
+    "${BWRAP_GITENV[@]}" \
     \
     --chdir "$SANDBOX_CWD" \
     proxychains -q opencode "${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"}" || EXIT_CODE=$?
