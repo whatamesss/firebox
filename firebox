@@ -1434,6 +1434,8 @@ bwrap \
     --unsetenv CONFIG_PROTECT \
     --unsetenv PKG_CONFIG_PATH \
     --unsetenv NVD_BACKEND \
+    --unsetenv SESSION_MANAGER \
+    --unsetenv ICEAUTHORITY \
     ${BWRAP_IM[@]} \
     "${BWRAP_GPU_ENV[@]}" \
     \
