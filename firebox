@@ -744,6 +744,12 @@ user_pref("intl.accept_languages", "en-US, en");
 user_pref("extensions.languagepacks.enabled", false);
 user_pref("browser.translation.detectLanguage", false);
 
+/* --- Speech --- */
+user_pref("media.webspeech.recognition.enable", false);
+
+/* --- Speculation Rules (prefetch/prerender) --- */
+user_pref("dom.speculation_rules.enabled", false);
+
 /* --- Accessibility & Display --- */
 user_pref("accessibility.force_disabled", 1);
 user_pref("browser.display.document_color_use", 0);
