@@ -331,15 +331,18 @@ fi
 # 5. Copy Storage Files and Directories
 for src in "$SOURCE_PROFILE"/storage*; do
     if [[ -n "$src" && -e "$src" ]]; then
+        # NOTE: storage-sync-v2.sqlite holds browser.storage.sync data. Many
+        # add-ons (e.g. Dark Reader's sync mode, Cast Kodi) keep their settings
+        # there, so it MUST be carried over; only site/website data is purged
+        # below. Do not exclude "*v2.sqlite" here or those add-ons reset.
+        # Token-like fields in this DB are scrubbed later (sanitize_sync_storage).
         rsync -a \
             --exclude='*search*' \
             --exclude='*archive*' \
-            --exclude='*v2.sqlite' \
             --exclude='*/idb/*.sqlite-wal' \
             --exclude='*/idb/*.sqlite-shm' \
             --exclude='*/idb/*.sqlite-journal' \
             --exclude='*/fs/*' \
-            --exclude='*/userContextId=*' \
             "$src" "$EPHEMERAL_PROFILE/" || echo "Warning: Failed to sync storage $src" >&2
     fi
 done
@@ -374,8 +377,9 @@ fi
 # Best-effort token scrubbing for extension storage (config is preserved)
 # -------------------------------------------------------------------------
 # Extension configuration is synced so add-ons feel native, but auth tokens
-# and secrets must not be carried across. This only rewrites JSON files
-# (legacy browser-extension-data storage.js); binary IndexedDB is left as-is.
+# and secrets must not be carried across. This rewrites JSON files (legacy
+# browser-extension-data storage.js) and the browser.storage.sync replica
+# (storage-sync-v2.sqlite); binary IndexedDB is left as-is.
 EXT_TOKEN_RE='(?i)(token|secret|password|passwd|credential|api[_-]?key|bearer|private[_-]?key|session[_-]?id)'
 sanitize_extension_tokens() {
     command -v jq &>/dev/null || return 0
@@ -403,6 +407,50 @@ sanitize_extension_tokens() {
     fi
 }
 sanitize_extension_tokens
+
+# Same scrubber, applied to browser.storage.sync values kept in the profile's
+# storage-sync-v2.sqlite (JSON blobs in a "data" column). Best-effort: skipped
+# if jq/sqlite3 are unavailable or the file has an unexpected shape.
+sanitize_sync_storage() {
+    command -v jq &>/dev/null || return 0
+    command -v sqlite3 &>/dev/null || return 0
+    local db="$EPHEMERAL_PROFILE/storage-sync-v2.sqlite"
+    [[ -f "$db" ]] || return 0
+
+    # Fold any WAL contents into the main DB so nothing is missed.
+    sqlite3 "$db" 'PRAGMA wal_checkpoint(TRUNCATE);' >/dev/null 2>&1 || true
+
+    local jq_prog table sqlfile count=0 changed
+    jq_prog=$(cat <<'JQ'
+.[]
+| (.data | fromjson? // empty) as $obj
+| ($obj
+   | walk(if type == "object"
+          then with_entries(select((.key | test($re)) | not))
+          else . end)) as $clean
+| select(($obj | tojson) != ($clean | tojson))
+| "UPDATE \"\($tbl)\" SET data='" + (($clean | tojson) | gsub("'"; "''")) + "' WHERE rowid=\(.rid);"
+JQ
+)
+    while IFS= read -r table; do
+        [[ -n "$table" ]] || continue
+        sqlfile="${db}.scrub.$$"
+        if sqlite3 -json "$db" "SELECT rowid AS rid, data FROM \"$table\";" 2>/dev/null \
+           | jq -r --arg re "$EXT_TOKEN_RE" --arg tbl "$table" "$jq_prog" > "$sqlfile" 2>/dev/null; then
+            changed=$(wc -l < "$sqlfile" 2>/dev/null || echo 0)
+            if (( changed > 0 )); then
+                sqlite3 "$db" < "$sqlfile" >/dev/null 2>&1 || true
+                count=$((count + changed))
+            fi
+        fi
+        rm -f "$sqlfile"
+    done < <(sqlite3 "$db" \
+        "SELECT m.name FROM sqlite_master AS m WHERE m.type='table' AND m.name NOT LIKE 'sqlite_%' AND EXISTS (SELECT 1 FROM pragma_table_info(m.name) AS p WHERE p.name='data');" 2>/dev/null)
+    if (( VERBOSE )) && (( count > 0 )); then
+        echo "[Info] Scrubbed token-like fields in $count synced extension record(s)."
+    fi
+}
+sanitize_sync_storage
 
 # -------------------------------------------------------------------------
 # Fix extension paths for portability
