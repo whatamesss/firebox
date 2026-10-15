@@ -39,8 +39,9 @@ and CUPS are bound; egress is routed through `proxychains` when available.
 ### firebox-opencode — sandboxed opencode CLI
 Starts from an empty root and mounts only what a coding session needs: a
 read-only system tree, private `/tmp` and `/dev/shm`, and a handful of
-persistent read-write opencode directories. `HOME` is `/projects`, and the
-session begins in the directory the launcher was invoked from.
+persistent read-write opencode directories. `HOME` is the real home directory
+(so `~/.opencode` is respected and upgraded in place), and the session begins
+in the directory the launcher was invoked from.
 
 → [`firebox-opencode-readme.txt`](firebox-opencode-readme.txt)
 

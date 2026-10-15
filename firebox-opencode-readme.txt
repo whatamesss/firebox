@@ -10,8 +10,10 @@ read-write directories.
 1. Core Concept
 
 The script builds an empty root and mounts in exactly the pieces opencode
-requires. opencode runs with HOME=/projects and starts in the directory the
-launcher was invoked from (provided that directory is inside ~/projects).
+requires. opencode runs with HOME set to the real home directory (so its
+self-managed install tree at ~/.opencode is respected) and starts in the
+directory the launcher was invoked from (provided that directory is inside
+~/projects).
 Everything outside the persistent directories is either read-only or a
 throwaway tmpfs.
 
@@ -20,7 +22,8 @@ throwaway tmpfs.
      Working directory:
           If launched from inside ~/projects, opencode starts in the matching
           /projects/... subfolder; otherwise it starts in /projects. HOME is
-          set to /projects.
+          set to the real home directory, so ~/.opencode/bin/opencode is the
+          binary opencode upgrades in place.
 
      Persistent, read-write state:
           ~/projects                -> /projects
@@ -28,6 +31,7 @@ throwaway tmpfs.
           ~/.config/opencode        -> ~/.config/opencode
           ~/.cache/opencode         -> ~/.cache/opencode
           ~/.local/share/opencode   -> ~/.local/share/opencode
+          ~/.local/state/opencode   -> ~/.local/state/opencode
           ~/.gitconfig is bound read-only, if present (git identity).
 
      Read-only system:
@@ -54,9 +58,11 @@ throwaway tmpfs.
           DISPLAY, WAYLAND_DISPLAY, XAUTHORITY, DBUS_SESSION_BUS_ADDRESS,
           SSH_AUTH_SOCK, GNUPGHOME, GPG_AGENT_INFO and the KDE_* variables are
           unset. LANG and LC_ALL are forced to C.UTF-8.
-          XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_CACHE_HOME and XDG_STATE_HOME
-          point at the real host directories so opencode locates its own
-          configuration and data.
+          HOME is the real home directory and XDG_CONFIG_HOME, XDG_DATA_HOME,
+          XDG_CACHE_HOME and XDG_STATE_HOME point at the real host
+          directories so opencode locates its own configuration and data.
+          Because the sandbox root is otherwise empty, the rest of the home
+          directory is still inaccessible even though HOME names it.
 
      Network:
           The network namespace is not unshared. If proxychains is present,
@@ -79,6 +85,9 @@ throwaway tmpfs.
 
      Ctrl-C is disabled inside the sandbox (via a TUI keybind overlay set with
      OPENCODE_TUI_CONFIG), so it cannot quit the session or clear the prompt.
+     The overlay is written to a local file at launch and bind-mounted
+     read-only over /etc/opencode-tui.json; it carries no remote "$schema"
+     URL and is never fetched from the network.
      Exit with /quit (or ctrl+x q, or ctrl+d).
      --new-session detaches the controlling terminal, so terminal resizes may
      not reflow until the session restarts. Remove that flag if this is a

@@ -4,9 +4,11 @@ set -euo pipefail
 # -------------------------------------------------------------------------
 # firebox-opencode — hardened bubblewrap sandbox for opencode
 #
-# opencode runs with HOME=/projects and starts in the directory you invoked
-# the launcher from (when that directory is inside ~/projects). The sandbox
-# starts from an empty root and only exposes:
+# opencode's HOME is the real home directory, so its self-managed install tree
+# at ~/.opencode (the curl installer writes $HOME/.opencode/bin) is respected
+# and in-sandbox upgrades land where the running binary actually is. It starts
+# in the directory you invoked the launcher from (when that directory is inside
+# ~/projects). The sandbox starts from an empty root and only exposes:
 #   * read-only system trees (libs, certs, timezone, toolchains, ...)
 #   * a private, ephemeral /tmp and /dev/shm
 #   * read-write, persistent access to exactly:
@@ -14,7 +16,8 @@ set -euo pipefail
 #       ~/.config/opencode
 #       ~/.cache/opencode
 #       ~/.local/share/opencode
-#       ~/projects           (mounted at /projects, and used as HOME)
+#       ~/.local/state/opencode
+#       ~/projects            (mounted at /projects)
 #   * no Wayland, no D-Bus, no GPU, no audio, no X11, no desktop portals.
 # -------------------------------------------------------------------------
 
@@ -70,17 +73,19 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM HUP
 
-printf '%s:x:%s:%s:%s:/projects:/bin/false\n' \
-    "$REAL_USER" "$(id -u)" "$(id -g)" "$REAL_USER" > "$OPENCODE_RUNTIME/passwd"
+printf '%s:x:%s:%s:%s:%s:/bin/false\n' \
+    "$REAL_USER" "$(id -u)" "$(id -g)" "$REAL_USER" "$REAL_HOME" > "$OPENCODE_RUNTIME/passwd"
 printf '%s:x:%s:\n' "$REAL_USER" "$(id -g)" > "$OPENCODE_RUNTIME/group"
 
 # TUI keybind overlay: drop Ctrl-C from both app_exit and input_clear so it
 # can no longer quit or clear the prompt; leave the session with /quit (or
-# ctrl+x q). Injected via OPENCODE_TUI_CONFIG, which opencode merges on top
-# of the normal tui.json.
+# ctrl+x q). The file is written locally just below and bind-mounted
+# read-only as /etc/opencode-tui.json; it is never fetched from the network.
+# Injected via OPENCODE_TUI_CONFIG, which opencode merges on top of the normal
+# tui.json. No "$schema" URL is included so nothing points at a remote
+# resource at launch.
 cat > "$OPENCODE_RUNTIME/tui.json" << 'EOF'
 {
-  "$schema": "https://opencode.ai/tui.json",
   "keybinds": {
     "app_exit": "ctrl+d,<leader>q",
     "input_clear": "none"
@@ -94,6 +99,7 @@ PERSISTENT_DIRS=(
     "$REAL_HOME/.config/opencode"
     "$REAL_HOME/.cache/opencode"
     "$REAL_HOME/.local/share/opencode"
+    "$REAL_HOME/.local/state/opencode"
     "$PROJECTS_DIR"
 )
 for dir in "${PERSISTENT_DIRS[@]}"; do
@@ -227,10 +233,12 @@ BWRAP_RW=(
     --bind "$REAL_HOME/.config/opencode" "$REAL_HOME/.config/opencode"
     --bind "$REAL_HOME/.cache/opencode" "$REAL_HOME/.cache/opencode"
     --bind "$REAL_HOME/.local/share/opencode" "$REAL_HOME/.local/share/opencode"
+    --bind "$REAL_HOME/.local/state/opencode" "$REAL_HOME/.local/state/opencode"
 )
 
-# Read-only convenience: git identity, if present. Because HOME is /projects
-# rather than the real home, point git straight at the bound config file.
+# Read-only convenience: git identity, if present. HOME is the real home
+# again, so git would find ~/.gitconfig anyway; GIT_CONFIG_GLOBAL is set
+# explicitly so the lookup does not depend on HOME resolution.
 BWRAP_GITCONFIG=()
 BWRAP_GITENV=()
 if [[ -f "$REAL_HOME/.gitconfig" ]]; then
@@ -268,7 +276,7 @@ bwrap \
     "${BWRAP_SHARE[@]}" \
     "${BWRAP_ETC[@]}" \
     \
-    --setenv HOME "/projects" \
+    --setenv HOME "$REAL_HOME" \
     --setenv XDG_CONFIG_HOME "$REAL_HOME/.config" \
     --setenv XDG_DATA_HOME "$REAL_HOME/.local/share" \
     --setenv XDG_CACHE_HOME "$REAL_HOME/.cache" \
