@@ -32,6 +32,7 @@ throwaway tmpfs.
           ~/.cache/opencode         -> ~/.cache/opencode
           ~/.local/share/opencode   -> ~/.local/share/opencode
           ~/.local/state/opencode   -> ~/.local/state/opencode
+          /tmp/opencode             -> /tmp   (scratch, created at launch)
           ~/.gitconfig is bound read-only, if present (git identity).
 
      Read-only system:
@@ -42,11 +43,13 @@ throwaway tmpfs.
           nsswitch.conf, hosts, passwd/group, machine-id, localtime,
           proxychains.conf, gitconfig, profile files).
 
-     Ephemeral scratch:
-          A private tmpfs /tmp and /dev/shm, with TMPDIR pointed at /tmp. Tool
-          output therefore never touches the host disk and is discarded on
-          exit. /sys is reduced to CPU topology only, with no hardware
-          enumeration.
+     Scratch (/tmp):
+          /tmp is a bind of the host's /tmp/opencode, created at launch with
+          mode 700. The host's /tmp is a tmpfs, so nothing reaches the disk,
+          but unlike a sandbox-internal tmpfs the contents survive between
+          sessions and can be inspected from the host. /dev/shm remains a
+          private tmpfs. /sys is reduced to CPU topology only, with no
+          hardware enumeration.
 
 3. Isolation
 

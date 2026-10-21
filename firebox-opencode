@@ -10,7 +10,8 @@ set -euo pipefail
 # in the directory you invoked the launcher from (when that directory is inside
 # ~/projects). The sandbox starts from an empty root and only exposes:
 #   * read-only system trees (libs, certs, timezone, toolchains, ...)
-#   * a private, ephemeral /tmp and /dev/shm
+#   * /tmp backed by a dedicated host directory (/tmp/opencode), plus a
+#     private, ephemeral /dev/shm
 #   * read-write, persistent access to exactly:
 #       ~/.opencode
 #       ~/.config/opencode
@@ -143,6 +144,30 @@ else
 fi
 
 # -------------------------------------------------------------------------
+# Scratch space
+#
+# The sandbox's /tmp is a bind of the host's /tmp/opencode: a dedicated
+# directory, created here with mode 700. The host's /tmp is a tmpfs, so the
+# contents never reach the disk, but they survive between sessions and can be
+# inspected from outside the sandbox. The host's real /tmp stays hidden.
+# -------------------------------------------------------------------------
+OPENCODE_TMP="/tmp/opencode"
+if [[ -L "$OPENCODE_TMP" ]]; then
+    echo "Error: '$OPENCODE_TMP' is a symlink; refusing to use it." >&2
+    exit 1
+fi
+if [[ -e "$OPENCODE_TMP" && ! -d "$OPENCODE_TMP" ]]; then
+    echo "Error: '$OPENCODE_TMP' exists and is not a directory." >&2
+    exit 1
+fi
+if [[ -d "$OPENCODE_TMP" && "$(stat -c %u "$OPENCODE_TMP")" != "$(id -u)" ]]; then
+    echo "Error: '$OPENCODE_TMP' is not owned by the current user." >&2
+    exit 1
+fi
+mkdir -p "$OPENCODE_TMP"
+chmod 700 "$OPENCODE_TMP"
+
+# -------------------------------------------------------------------------
 # Working directory: ~/projects (or the subfolder the launcher was run from)
 # -------------------------------------------------------------------------
 CALLER_PWD="${PWD:-$PROJECTS_DIR}"
@@ -229,6 +254,7 @@ BWRAP_SYS=(
 # -------------------------------------------------------------------------
 BWRAP_RW=(
     --bind "$PROJECTS_DIR" "/projects"
+    --bind "$OPENCODE_TMP" "/tmp"
     --bind "$REAL_HOME/.opencode" "$REAL_HOME/.opencode"
     --bind "$REAL_HOME/.config/opencode" "$REAL_HOME/.config/opencode"
     --bind "$REAL_HOME/.cache/opencode" "$REAL_HOME/.cache/opencode"
@@ -267,7 +293,6 @@ bwrap \
     --proc /proc \
     --dev /dev \
     --dev-bind-try /dev/pts /dev/pts \
-    --tmpfs /tmp \
     --tmpfs /dev/shm \
     \
     "${BWRAP_SYS[@]}" \
