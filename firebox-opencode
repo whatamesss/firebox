@@ -101,6 +101,7 @@ PERSISTENT_DIRS=(
     "$REAL_HOME/.cache/opencode"
     "$REAL_HOME/.local/share/opencode"
     "$REAL_HOME/.local/state/opencode"
+    "$REAL_HOME/.mozilla"
     "$PROJECTS_DIR"
 )
 for dir in "${PERSISTENT_DIRS[@]}"; do
@@ -260,6 +261,7 @@ BWRAP_RW=(
     --bind "$REAL_HOME/.cache/opencode" "$REAL_HOME/.cache/opencode"
     --bind "$REAL_HOME/.local/share/opencode" "$REAL_HOME/.local/share/opencode"
     --bind "$REAL_HOME/.local/state/opencode" "$REAL_HOME/.local/state/opencode"
+    --bind "$REAL_HOME/.mozilla" "$REAL_HOME/.mozilla"
 )
 
 # Read-only convenience: git identity, if present. HOME is the real home
