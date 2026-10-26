@@ -306,12 +306,12 @@ for src in "$SOURCE_PROFILE"/extension*; do
     fi
 done
 
-# 2. Copy Extension Registry (configs only)
+# 2. Copy Extension Registry
 if [[ -n "$SOURCE_PROFILE" ]] && [[ -f "$SOURCE_PROFILE/extensions.json" ]]; then
     cp "$SOURCE_PROFILE/extensions.json" "$EPHEMERAL_PROFILE/extensions.json"
 fi
 
-# 3. Copy Extension Preferences / Settings (configs only)
+# 3. Copy Extension Preferences / Settings
 for file in \
     extension-preferences.json \
     extension-settings.json
@@ -321,8 +321,90 @@ do
     fi
 done
 
-# Skip browser-extension-data/ and storage/ - only bookmarks and extension configs are carried
+# 4. Copy Extension Storage Data (needed for extension configs like uBlock Origin)
+# This contains per-extension settings, NOT site cookies (cookies are in cookies.sqlite which we purge)
+if [[ -d "$SOURCE_PROFILE/browser-extension-data" ]]; then
+    rsync -a "$SOURCE_PROFILE/browser-extension-data" "$EPHEMERAL_PROFILE/" || echo "Warning: Failed to sync extension data" >&2
+fi
+
+# 5. Copy storage-sync-v2.sqlite only (for browser.storage.sync) if present
+if [[ -f "$SOURCE_PROFILE/storage-sync-v2.sqlite" ]]; then
+    cp "$SOURCE_PROFILE/storage-sync-v2.sqlite" "$EPHEMERAL_PROFILE/storage-sync-v2.sqlite"
+    for ext in -wal -shm -journal; do
+        [[ -f "$SOURCE_PROFILE/storage-sync-v2.sqlite$ext" ]] && cp "$SOURCE_PROFILE/storage-sync-v2.sqlite$ext" "$EPHEMERAL_PROFILE/storage-sync-v2.sqlite$ext" 2>/dev/null || true
+    done
+fi
+
 shopt -u nullglob
+
+# Best-effort token scrubbing for extension storage (config is preserved)
+EXT_TOKEN_RE='(?i)(token|secret|password|passwd|credential|api[_-]?key|bearer|private[_-]?key|session[_-]?id)'
+sanitize_extension_tokens() {
+    command -v jq &>/dev/null || return 0
+    local f tmp count=0
+    shopt -s nullglob
+    for f in "$EPHEMERAL_PROFILE"/browser-extension-data/*/*.js \
+             "$EPHEMERAL_PROFILE"/browser-extension-data/*/*.json; do
+        [[ -f "$f" ]] || continue
+        jq -e . "$f" >/dev/null 2>&1 || continue
+        tmp="${f}.tmp.$$"
+        if jq --arg re "$EXT_TOKEN_RE" '
+                walk(if type == "object"
+                     then with_entries(select((.key | test($re)) | not))
+                     else . end)
+            ' "$f" > "$tmp" 2>/dev/null; then
+            mv "$tmp" "$f"
+            count=$((count + 1))
+        else
+            rm -f "$tmp"
+        fi
+    done
+    shopt -u nullglob
+    if (( VERBOSE )) && (( count > 0 )); then
+        echo "[Info] Scrubbed token-like fields in $count extension storage file(s)."
+    fi
+}
+sanitize_extension_tokens
+
+sanitize_sync_storage() {
+    command -v jq &>/dev/null || return 0
+    command -v sqlite3 &>/dev/null || return 0
+    local db="$EPHEMERAL_PROFILE/storage-sync-v2.sqlite"
+    [[ -f "$db" ]] || return 0
+
+    sqlite3 "$db" 'PRAGMA wal_checkpoint(TRUNCATE);' >/dev/null 2>&1 || true
+
+    local jq_prog table sqlfile count=0 changed
+    jq_prog=$(cat <<'JQ'
+.[]
+| (.data | fromjson? // empty) as $obj
+| ($obj
+   | walk(if type == "object"
+          then with_entries(select((.key | test($re)) | not))
+          else . end)) as $clean
+| select(($obj | tojson) != ($clean | tojson))
+| "UPDATE \"\($tbl)\" SET data='" + (($clean | tojson) | gsub("'"; "''")) + "' WHERE rowid=\(.rid);"
+JQ
+)
+    while IFS= read -r table; do
+        [[ -n "$table" ]] || continue
+        sqlfile="${db}.scrub.$$"
+        if sqlite3 -json "$db" "SELECT rowid AS rid, data FROM \"$table\";" 2>/dev/null \
+           | jq -r --arg re "$EXT_TOKEN_RE" --arg tbl "$table" "$jq_prog" > "$sqlfile" 2>/dev/null; then
+            changed=$(wc -l < "$sqlfile" 2>/dev/null || echo 0)
+            if (( changed > 0 )); then
+                sqlite3 "$db" < "$sqlfile" >/dev/null 2>&1 || true
+                count=$((count + changed))
+            fi
+        fi
+        rm -f "$sqlfile"
+    done < <(sqlite3 "$db" \
+        "SELECT m.name FROM sqlite_master AS m WHERE m.type='table' AND m.name NOT LIKE 'sqlite_%' AND EXISTS (SELECT 1 FROM pragma_table_info(m.name) AS p WHERE p.name='data');" 2>/dev/null)
+    if (( VERBOSE )) && (( count > 0 )); then
+        echo "[Info] Scrubbed token-like fields in $count synced extension record(s)."
+    fi
+}
+sanitize_sync_storage
 
 # Safe Bookmark Injection (Sanitized places.sqlite)
 # -------------------------------------------------------------------------
