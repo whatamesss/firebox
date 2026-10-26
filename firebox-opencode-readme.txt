@@ -32,6 +32,7 @@ throwaway tmpfs.
           ~/.cache/opencode         -> ~/.cache/opencode
           ~/.local/share/opencode   -> ~/.local/share/opencode
           ~/.local/state/opencode   -> ~/.local/state/opencode
+          ~/.mozilla                -> ~/.mozilla
           /tmp/opencode             -> /tmp   (scratch, created at launch)
           ~/.gitconfig is bound read-only, if present (git identity).
 
