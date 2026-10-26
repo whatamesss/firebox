@@ -21,7 +21,7 @@ set -euo pipefail
 #       ~/.local/share/opencode
 #       ~/.local/state/opencode
 #       ~/projects            (mounted at /projects)
-#   * read-only access to ~/.mozilla (Firefox profile data) and ~/.gitconfig
+#   * read-only access to ~/.gitconfig
 #   * no Wayland, no D-Bus, no GPU, no audio, no X11, no desktop portals.
 # -------------------------------------------------------------------------
 
@@ -97,8 +97,7 @@ cat > "$OPENCODE_RUNTIME/tui.json" << 'EOF'
 }
 EOF
 
-# Host directories that must exist. PERSISTENT_DIRS are bound read-write;
-# READONLY_DIRS are bound read-only (Firefox profile data is only read here).
+# Host directories that must exist. PERSISTENT_DIRS are bound read-write.
 PERSISTENT_DIRS=(
     "$REAL_HOME/.opencode"
     "$REAL_HOME/.config/opencode"
@@ -107,10 +106,7 @@ PERSISTENT_DIRS=(
     "$REAL_HOME/.local/state/opencode"
     "$PROJECTS_DIR"
 )
-READONLY_DIRS=(
-    "$REAL_HOME/.mozilla"
-)
-for dir in "${PERSISTENT_DIRS[@]}" "${READONLY_DIRS[@]}"; do
+for dir in "${PERSISTENT_DIRS[@]}"; do
     if [[ ! -d "$dir" ]]; then
         echo "Error: Required directory '$dir' not found." >&2
         exit 1
@@ -276,9 +272,6 @@ BWRAP_RW=(
     --bind "$REAL_HOME/.local/state/opencode" "$REAL_HOME/.local/state/opencode"
 )
 
-# Read-only binds (none)
-BWRAP_RO=()
-
 # Read-only convenience: git identity, if present. HOME is the real home
 # again, so git would find ~/.gitconfig anyway; GIT_CONFIG_GLOBAL is set
 # explicitly so the lookup does not depend on HOME resolution.
@@ -291,11 +284,29 @@ fi
 
 # -------------------------------------------------------------------------
 # Bwrap command construction
+#
+# OpenCode 2.x normally drives a "background service" whose url/pid/port are
+# recorded in ~/.local/state/opencode/service.json. The port is fixed, the
+# record persists across sessions (that directory is bind-mounted above), and
+# the service itself dies with the sandbox (--die-with-parent). Every launch
+# therefore inherits a record pointing at a service that no longer exists: the
+# client spends a fixed ~5s reaping it before starting its own, and a second
+# concurrent session collides on the same port. A per-session sandbox wants
+# neither, so run with a private in-process server (--standalone) instead.
+# Not added twice if the caller already passed the flag.
 # -------------------------------------------------------------------------
+OPENCODE_FLAGS=(--standalone)
+for arg in "${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"}"; do
+    if [[ "$arg" == "--standalone" ]]; then
+        OPENCODE_FLAGS=()
+        break
+    fi
+done
+
 if [[ -n "$PROXYCHAINS_BIN" ]]; then
-    BWRAP_CMD=("$PROXYCHAINS_BIN" -q opencode "${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"}")
+    BWRAP_CMD=("$PROXYCHAINS_BIN" -q opencode "${OPENCODE_FLAGS[@]+"${OPENCODE_FLAGS[@]}"}" "${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"}")
 else
-    BWRAP_CMD=(opencode "${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"}")
+    BWRAP_CMD=(opencode "${OPENCODE_FLAGS[@]+"${OPENCODE_FLAGS[@]}"}" "${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"}")
 fi
 
 bwrap \
@@ -354,7 +365,6 @@ bwrap \
     --unsetenv PROXYCHAINS_QUIET_MODE \
     \
     "${BWRAP_RW[@]}" \
-    "${BWRAP_RO[@]}" \
     "${BWRAP_GITCONFIG[@]}" \
     "${BWRAP_GITENV[@]}" \
     \

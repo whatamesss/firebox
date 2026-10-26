@@ -35,7 +35,6 @@ throwaway tmpfs.
           /tmp/opencode             -> /tmp   (scratch, created at launch)
 
      Read-only home data:
-          ~/.mozilla                -> ~/.mozilla  (Firefox profile data)
           ~/.gitconfig is bound read-only, if present (git identity).
 
      Read-only system:
@@ -110,3 +109,13 @@ throwaway tmpfs.
      Because XDG_* point at the real host directories, only the opencode
      subdirectories exist inside the sandbox; other applications' config
      directories are not writable.
+     opencode runs with --standalone, i.e. with a private in-process server
+     rather than the shared "background service". The background service
+     records its url/pid/port in ~/.local/state/opencode/service.json on a
+     fixed port; that record outlives the sandbox while the service does not,
+     so every launch used to wait out a stale-service timeout (~5s) before
+     starting its own, and a second concurrent session could fail to bind the
+     port. --standalone removes both. Trade-off: cross-session features of the
+     background service (opencode service status/restart, /pair and other
+     remote clients) are not available inside the sandbox. Passing
+     --standalone yourself is fine; it is never added twice.
