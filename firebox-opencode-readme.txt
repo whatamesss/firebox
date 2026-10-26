@@ -55,8 +55,9 @@ throwaway tmpfs.
           a later session a stale or partially written object, which the
           loader rejects with "failed to map segment from shared object".
           /dev/shm is wiped when the sandbox exits, so that cannot recur.
-          /sys is reduced to CPU topology only, with no hardware
-          enumeration.
+          XDG_RUNTIME_DIR is a private mode-0700 /run/user/<uid> directory in
+          the sandbox root, also discarded with the sandbox. /sys is reduced
+          to CPU topology only, with no hardware enumeration.
 
 3. Isolation
 

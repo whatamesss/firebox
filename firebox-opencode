@@ -305,6 +305,8 @@ bwrap \
     --dev /dev \
     --dev-bind-try /dev/pts /dev/pts \
     --tmpfs /dev/shm \
+    --dir "/run/user/$(id -u)" \
+    --chmod 700 "/run/user/$(id -u)" \
     \
     "${BWRAP_SYS[@]}" \
     "${BWRAP_LIBS[@]}" \
@@ -318,7 +320,7 @@ bwrap \
     --setenv XDG_CACHE_HOME "$REAL_HOME/.cache" \
     --setenv XDG_STATE_HOME "$REAL_HOME/.local/state" \
     --setenv XDG_CONFIG_DIRS "/etc/xdg" \
-    --setenv XDG_RUNTIME_DIR "/dev/shm" \
+    --setenv XDG_RUNTIME_DIR "/run/user/$(id -u)" \
     --setenv PATH "$REAL_HOME/.opencode/bin:$PATH" \
     --setenv OPENCODE_TUI_CONFIG "/etc/opencode-tui.json" \
     --setenv LANG "C.UTF-8" \
