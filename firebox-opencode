@@ -21,6 +21,7 @@ set -euo pipefail
 #       ~/.local/share/opencode
 #       ~/.local/state/opencode
 #       ~/projects            (mounted at /projects)
+#   * read-only access to ~/.mozilla (Firefox profile data) and ~/.gitconfig
 #   * no Wayland, no D-Bus, no GPU, no audio, no X11, no desktop portals.
 # -------------------------------------------------------------------------
 
@@ -96,17 +97,20 @@ cat > "$OPENCODE_RUNTIME/tui.json" << 'EOF'
 }
 EOF
 
-# Persistent, read-write host directories. Every one must exist.
+# Host directories that must exist. PERSISTENT_DIRS are bound read-write;
+# READONLY_DIRS are bound read-only (Firefox profile data is only read here).
 PERSISTENT_DIRS=(
     "$REAL_HOME/.opencode"
     "$REAL_HOME/.config/opencode"
     "$REAL_HOME/.cache/opencode"
     "$REAL_HOME/.local/share/opencode"
     "$REAL_HOME/.local/state/opencode"
-    "$REAL_HOME/.mozilla"
     "$PROJECTS_DIR"
 )
-for dir in "${PERSISTENT_DIRS[@]}"; do
+READONLY_DIRS=(
+    "$REAL_HOME/.mozilla"
+)
+for dir in "${PERSISTENT_DIRS[@]}" "${READONLY_DIRS[@]}"; do
     if [[ ! -d "$dir" ]]; then
         echo "Error: Required directory '$dir' not found." >&2
         exit 1
@@ -270,7 +274,11 @@ BWRAP_RW=(
     --bind "$REAL_HOME/.cache/opencode" "$REAL_HOME/.cache/opencode"
     --bind "$REAL_HOME/.local/share/opencode" "$REAL_HOME/.local/share/opencode"
     --bind "$REAL_HOME/.local/state/opencode" "$REAL_HOME/.local/state/opencode"
-    --bind "$REAL_HOME/.mozilla" "$REAL_HOME/.mozilla"
+)
+
+# Read-only: Firefox profile data (bookmarks, extension configs) is only read.
+BWRAP_RO=(
+    --ro-bind "$REAL_HOME/.mozilla" "$REAL_HOME/.mozilla"
 )
 
 # Read-only convenience: git identity, if present. HOME is the real home
@@ -348,6 +356,7 @@ bwrap \
     --unsetenv PROXYCHAINS_QUIET_MODE \
     \
     "${BWRAP_RW[@]}" \
+    "${BWRAP_RO[@]}" \
     "${BWRAP_GITCONFIG[@]}" \
     "${BWRAP_GITENV[@]}" \
     \
