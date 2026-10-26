@@ -299,19 +299,19 @@ fi
 # -------------------------------------------------------------------------
 shopt -s nullglob
 
-# 1. Copy Extensions (Binaries)
+# 1. Copy Extensions (Binaries) - needed for installed extensions to load
 for src in "$SOURCE_PROFILE"/extension*; do
     if [[ -n "$src" && -e "$src" ]]; then
         rsync -a "$src" "$EPHEMERAL_PROFILE/" || echo "Warning: Failed to sync $src" >&2
     fi
 done
 
-# 2. Copy Extension Registry
+# 2. Copy Extension Registry (configs only)
 if [[ -n "$SOURCE_PROFILE" ]] && [[ -f "$SOURCE_PROFILE/extensions.json" ]]; then
     cp "$SOURCE_PROFILE/extensions.json" "$EPHEMERAL_PROFILE/extensions.json"
 fi
 
-# 3. Copy Extension Preferences / Settings
+# 3. Copy Extension Preferences / Settings (configs only)
 for file in \
     extension-preferences.json \
     extension-settings.json
@@ -321,157 +321,9 @@ do
     fi
 done
 
-# 4. Copy Extension Storage Data
-# NOTE: This folder contains Local Settings (NOT Cookies).
-# Extensions store cookies in the global cookies.sqlite (excluded) or http++ storage (deleted).
-if [[ -d "$SOURCE_PROFILE/browser-extension-data" ]]; then
-    rsync -a "$SOURCE_PROFILE/browser-extension-data" "$EPHEMERAL_PROFILE/" || echo "Warning: Failed to sync extension data" >&2
-fi
-
-# 5. Copy Storage Files and Directories
-for src in "$SOURCE_PROFILE"/storage*; do
-    if [[ -n "$src" && -e "$src" ]]; then
-        # NOTE: storage-sync-v2.sqlite holds browser.storage.sync data. Many
-        # add-ons (e.g. Dark Reader's sync mode, Cast Kodi) keep their settings
-        # there, so it MUST be carried over; only site/website data is purged
-        # below. Do not exclude "*v2.sqlite" here or those add-ons reset.
-        # Token-like fields in this DB are scrubbed later (sanitize_sync_storage).
-        rsync -a \
-            --exclude='*search*' \
-            --exclude='*archive*' \
-            --exclude='*/idb/*.sqlite-wal' \
-            --exclude='*/idb/*.sqlite-shm' \
-            --exclude='*/idb/*.sqlite-journal' \
-            --exclude='*/fs/*' \
-            "$src" "$EPHEMERAL_PROFILE/" || echo "Warning: Failed to sync storage $src" >&2
-    fi
-done
+# Skip browser-extension-data/ and storage/ - only bookmarks and extension configs are carried
 shopt -u nullglob
 
-# -------------------------------------------------------------------------
-# SANITIZATION: Purge Website Data, Preserve Extension/Service Data
-# -------------------------------------------------------------------------
-sanitize_storage() {
-    local dir="$1"
-    if [[ -d "$dir" ]]; then
-        find "$dir" \
-            -mindepth 1 \
-            -maxdepth 1 \
-            \( -name 'http++*' -o -name 'https++*' -o -name 'file++*' -o -name 'about++*' \) \
-            -exec rm -rf {} + 2>/dev/null || true
-    fi
-}
-
-sanitize_storage "$EPHEMERAL_PROFILE/storage/default"
-sanitize_storage "$EPHEMERAL_PROFILE/storage/permanent"
-
-if [[ -d "$EPHEMERAL_PROFILE/storage" ]]; then
-    find "$EPHEMERAL_PROFILE/storage" \
-        -mindepth 1 \
-        -maxdepth 1 \
-        \( -name 'http++*' -o -name 'https++*' \) \
-        -exec rm -rf {} + 2>/dev/null || true
-fi
-
-# -------------------------------------------------------------------------
-# Best-effort token scrubbing for extension storage (config is preserved)
-# -------------------------------------------------------------------------
-# Extension configuration is synced so add-ons feel native, but auth tokens
-# and secrets must not be carried across. This rewrites JSON files (legacy
-# browser-extension-data storage.js) and the browser.storage.sync replica
-# (storage-sync-v2.sqlite); binary IndexedDB is left as-is.
-EXT_TOKEN_RE='(?i)(token|secret|password|passwd|credential|api[_-]?key|bearer|private[_-]?key|session[_-]?id)'
-sanitize_extension_tokens() {
-    command -v jq &>/dev/null || return 0
-    local f tmp count=0
-    shopt -s nullglob
-    for f in "$EPHEMERAL_PROFILE"/browser-extension-data/*/*.js \
-             "$EPHEMERAL_PROFILE"/browser-extension-data/*/*.json; do
-        [[ -f "$f" ]] || continue
-        jq -e . "$f" >/dev/null 2>&1 || continue
-        tmp="${f}.tmp.$$"
-        if jq --arg re "$EXT_TOKEN_RE" '
-                walk(if type == "object"
-                     then with_entries(select((.key | test($re)) | not))
-                     else . end)
-            ' "$f" > "$tmp" 2>/dev/null; then
-            mv "$tmp" "$f"
-            count=$((count + 1))
-        else
-            rm -f "$tmp"
-        fi
-    done
-    shopt -u nullglob
-    if (( VERBOSE )) && (( count > 0 )); then
-        echo "[Info] Scrubbed token-like fields in $count extension storage file(s)."
-    fi
-}
-sanitize_extension_tokens
-
-# Same scrubber, applied to browser.storage.sync values kept in the profile's
-# storage-sync-v2.sqlite (JSON blobs in a "data" column). Best-effort: skipped
-# if jq/sqlite3 are unavailable or the file has an unexpected shape.
-sanitize_sync_storage() {
-    command -v jq &>/dev/null || return 0
-    command -v sqlite3 &>/dev/null || return 0
-    local db="$EPHEMERAL_PROFILE/storage-sync-v2.sqlite"
-    [[ -f "$db" ]] || return 0
-
-    # Fold any WAL contents into the main DB so nothing is missed.
-    sqlite3 "$db" 'PRAGMA wal_checkpoint(TRUNCATE);' >/dev/null 2>&1 || true
-
-    local jq_prog table sqlfile count=0 changed
-    jq_prog=$(cat <<'JQ'
-.[]
-| (.data | fromjson? // empty) as $obj
-| ($obj
-   | walk(if type == "object"
-          then with_entries(select((.key | test($re)) | not))
-          else . end)) as $clean
-| select(($obj | tojson) != ($clean | tojson))
-| "UPDATE \"\($tbl)\" SET data='" + (($clean | tojson) | gsub("'"; "''")) + "' WHERE rowid=\(.rid);"
-JQ
-)
-    while IFS= read -r table; do
-        [[ -n "$table" ]] || continue
-        sqlfile="${db}.scrub.$$"
-        if sqlite3 -json "$db" "SELECT rowid AS rid, data FROM \"$table\";" 2>/dev/null \
-           | jq -r --arg re "$EXT_TOKEN_RE" --arg tbl "$table" "$jq_prog" > "$sqlfile" 2>/dev/null; then
-            changed=$(wc -l < "$sqlfile" 2>/dev/null || echo 0)
-            if (( changed > 0 )); then
-                sqlite3 "$db" < "$sqlfile" >/dev/null 2>&1 || true
-                count=$((count + changed))
-            fi
-        fi
-        rm -f "$sqlfile"
-    done < <(sqlite3 "$db" \
-        "SELECT m.name FROM sqlite_master AS m WHERE m.type='table' AND m.name NOT LIKE 'sqlite_%' AND EXISTS (SELECT 1 FROM pragma_table_info(m.name) AS p WHERE p.name='data');" 2>/dev/null)
-    if (( VERBOSE )) && (( count > 0 )); then
-        echo "[Info] Scrubbed token-like fields in $count synced extension record(s)."
-    fi
-}
-sanitize_sync_storage
-
-# -------------------------------------------------------------------------
-# Fix extension paths for portability
-# -------------------------------------------------------------------------
-if [[ -f "$EPHEMERAL_PROFILE/extensions.json" ]] && [[ -n "$SOURCE_PROFILE" ]]; then
-    awk -v src="$SOURCE_PROFILE/" -v tgt="$EPHEMERAL_PROFILE/" '
-    BEGIN { s_len = length(src) }
-    {
-        out = ""
-        idx = index($0, src)
-        while (idx > 0) {
-            out = out substr($0, 1, idx - 1) tgt
-            $0 = substr($0, idx + s_len)
-            idx = index($0, src)
-        }
-        print out $0
-    }' "$EPHEMERAL_PROFILE/extensions.json" > "$EPHEMERAL_PROFILE/extensions.json.tmp" \
-    && mv "$EPHEMERAL_PROFILE/extensions.json.tmp" "$EPHEMERAL_PROFILE/extensions.json"
-fi
-
-# -------------------------------------------------------------------------
 # Safe Bookmark Injection (Sanitized places.sqlite)
 # -------------------------------------------------------------------------
 if [[ -n "$SOURCE_PROFILE" ]] && [[ -f "$SOURCE_PROFILE/places.sqlite" ]]; then
@@ -487,6 +339,19 @@ if [[ -n "$SOURCE_PROFILE" ]] && [[ -f "$SOURCE_PROFILE/places.sqlite" ]]; then
 EOSQL
     (( VERBOSE )) && echo "Bookmarks injected (History sanitized)."
 fi
+
+# Purge sensitive auth/cookie/autofill data - only bookmarks and extension configs retained
+for f in \
+    "$EPHEMERAL_PROFILE/cookies.sqlite" \
+    "$EPHEMERAL_PROFILE/logins.json" \
+    "$EPHEMERAL_PROFILE/formhistory.sqlite" \
+    "$EPHEMERAL_PROFILE/favicons.sqlite" \
+    "$EPHEMERAL_PROFILE/permissions.sqlite" \
+    "$EPHEMERAL_PROFILE/content-prefs.sqlite" \
+    "$EPHEMERAL_PROFILE/autofill-profiles.json" \
+    "$EPHEMERAL_PROFILE/autofill-cc-profiles.json"; do
+    rm -f "$f" "${f}-wal" "${f}-shm" "${f}-journal" 2>/dev/null || true
+done
 
 # -------------------------------------------------------------------------
 # Inject user.js
@@ -1014,12 +879,21 @@ echo "${REAL_USER}:x:$(id -u):$(id -g):${REAL_USER}:$SANDBOX:/bin/false" > "$TMP
 echo "${REAL_USER}:x:$(id -g):" > "$TMPFS_RUNTIME/group"
 
 machine_id=""
-if command -v uuidgen &>/dev/null; then
-    machine_id=$(uuidgen | tr -d '-')
+if [[ -r /dev/urandom ]]; then
+    if command -v od &>/dev/null; then
+        machine_id=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    elif command -v xxd &>/dev/null; then
+        machine_id=$(head -c 16 /dev/urandom | xxd -p -c 16)
+    elif command -v hexdump &>/dev/null; then
+        machine_id=$(head -c 16 /dev/urandom | hexdump -ve '1/1 "%02x"')
+    else
+        machine_id=$(dd if=/dev/urandom bs=16 count=1 2>/dev/null | base64 | tr -d '=+/\n' | cut -c1-32)
+    fi
 else
-    machine_id="deadbeef-$(id -u)-random"
+    machine_id=$(date +%s%N 2>/dev/null | sha256sum 2>/dev/null | awk '{print $1}' | cut -c1-32)
 fi
-printf '%s' "$machine_id" > "$TMPFS_RUNTIME/machine-id"
+[[ -z "$machine_id" ]] && machine_id="00000000000000000000000000000000"
+printf '%s\n' "$machine_id" > "$TMPFS_RUNTIME/machine-id"
 
 # -------------------------------------------------------------------------
 # FIX 1: IPv6 Blocking
