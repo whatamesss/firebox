@@ -276,10 +276,8 @@ BWRAP_RW=(
     --bind "$REAL_HOME/.local/state/opencode" "$REAL_HOME/.local/state/opencode"
 )
 
-# Read-only: Firefox profile data (bookmarks, extension configs) is only read.
-BWRAP_RO=(
-    --ro-bind "$REAL_HOME/.mozilla" "$REAL_HOME/.mozilla"
-)
+# Read-only binds (none)
+BWRAP_RO=()
 
 # Read-only convenience: git identity, if present. HOME is the real home
 # again, so git would find ~/.gitconfig anyway; GIT_CONFIG_GLOBAL is set
