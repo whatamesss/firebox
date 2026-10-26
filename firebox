@@ -327,6 +327,22 @@ if [[ -d "$SOURCE_PROFILE/browser-extension-data" ]]; then
     rsync -a "$SOURCE_PROFILE/browser-extension-data" "$EPHEMERAL_PROFILE/" || echo "Warning: Failed to sync extension data" >&2
 fi
 
+# 4b. Copy IndexedDB/LocalStorage for extensions only (moz-extension+++) from storage/
+if [[ -d "$SOURCE_PROFILE/storage" ]]; then
+    mkdir -p "$EPHEMERAL_PROFILE/storage"
+    for src in "$SOURCE_PROFILE"/storage/*; do
+        [[ -e "$src" ]] || continue
+        base="$(basename "$src")"
+        # Copy top-level storage dirs (default, permanent, temporary, etc.)
+        mkdir -p "$EPHEMERAL_PROFILE/storage/$base"
+        # Only copy extension storage, skip site data
+        for ext in "$src"/moz-extension+++* "$src"/chrome* "$src"/resource*; do
+            [[ -e "$ext" ]] || continue
+            rsync -a "$ext" "$EPHEMERAL_PROFILE/storage/$base/" || true
+        done
+    done
+fi
+
 # 5. Copy storage-sync-v2.sqlite only (for browser.storage.sync) if present
 if [[ -f "$SOURCE_PROFILE/storage-sync-v2.sqlite" ]]; then
     cp "$SOURCE_PROFILE/storage-sync-v2.sqlite" "$EPHEMERAL_PROFILE/storage-sync-v2.sqlite"
@@ -336,6 +352,31 @@ if [[ -f "$SOURCE_PROFILE/storage-sync-v2.sqlite" ]]; then
 fi
 
 shopt -u nullglob
+
+# -------------------------------------------------------------------------
+# SANITIZATION: Purge Website Data, Preserve Extension/Service Data
+# -------------------------------------------------------------------------
+sanitize_storage() {
+    local dir="$1"
+    if [[ -d "$dir" ]]; then
+        find "$dir" \
+            -mindepth 1 \
+            -maxdepth 1 \
+            \( -name 'http++*' -o -name 'https++*' -o -name 'file++*' -o -name 'about++*' \) \
+            -exec rm -rf {} + 2>/dev/null || true
+    fi
+}
+
+sanitize_storage "$EPHEMERAL_PROFILE/storage/default"
+sanitize_storage "$EPHEMERAL_PROFILE/storage/permanent"
+
+if [[ -d "$EPHEMERAL_PROFILE/storage" ]]; then
+    find "$EPHEMERAL_PROFILE/storage" \
+        -mindepth 1 \
+        -maxdepth 1 \
+        \( -name 'http++*' -o -name 'https++*' \) \
+        -exec rm -rf {} + 2>/dev/null || true
+fi
 
 # Best-effort token scrubbing for extension storage (config is preserved)
 EXT_TOKEN_RE='(?i)(token|secret|password|passwd|credential|api[_-]?key|bearer|private[_-]?key|session[_-]?id)'
@@ -413,13 +454,11 @@ if [[ -n "$SOURCE_PROFILE" ]] && [[ -f "$SOURCE_PROFILE/places.sqlite" ]]; then
     sqlite3 "$EPHEMERAL_PROFILE/places.sqlite" <<EOSQL
         DELETE FROM moz_historyvisits;
         DELETE FROM moz_inputhistory;
-        DELETE FROM moz_places
-            WHERE id NOT IN (SELECT fk FROM moz_bookmarks WHERE fk IS NOT NULL);
         UPDATE moz_places SET frecency = -1;
         UPDATE moz_places SET visit_count = 0;
         VACUUM;
 EOSQL
-    (( VERBOSE )) && echo "Bookmarks injected (History sanitized)."
+    (( VERBOSE )) && echo "Bookmarks injected (History sanitized, downloads preserved)."
 fi
 
 # Purge sensitive auth/cookie/autofill data - only bookmarks and extension configs retained
