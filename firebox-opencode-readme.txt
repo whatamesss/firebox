@@ -43,13 +43,19 @@ throwaway tmpfs.
           nsswitch.conf, hosts, passwd/group, machine-id, localtime,
           proxychains.conf, gitconfig, profile files).
 
-     Scratch (/tmp):
+     Scratch (/tmp and $TMPDIR):
           /tmp is a bind of the host's /tmp/opencode, created at launch with
           mode 700. The host's /tmp is a tmpfs, so nothing reaches the disk,
           but unlike a sandbox-internal tmpfs the contents survive between
-          sessions and can be inspected from the host. /dev/shm remains a
-          private tmpfs. /sys is reduced to CPU topology only, with no
-          hardware enumeration.
+          sessions and can be inspected from the host. Only non-executable
+          scratch belongs there. TMPDIR and BUN_TMPDIR point at the private,
+          ephemeral /dev/shm instead: Bun extracts its OpenTUI renderer into
+          $TMPDIR and dlopen()s it, and a shared, persistent $TMPDIR can hand
+          a later session a stale or partially written object, which the
+          loader rejects with "failed to map segment from shared object".
+          /dev/shm is wiped when the sandbox exits, so that cannot recur.
+          /sys is reduced to CPU topology only, with no hardware
+          enumeration.
 
 3. Isolation
 

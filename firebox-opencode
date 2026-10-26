@@ -11,7 +11,9 @@ set -euo pipefail
 # ~/projects). The sandbox starts from an empty root and only exposes:
 #   * read-only system trees (libs, certs, timezone, toolchains, ...)
 #   * /tmp backed by a dedicated host directory (/tmp/opencode), plus a
-#     private, ephemeral /dev/shm
+#     private, ephemeral /dev/shm which also backs TMPDIR (Bun unpacks its
+#     native renderer into $TMPDIR and dlopen()s it, so executable payloads
+#     must live on a per-session tmpfs, never in the shared /tmp)
 #   * read-write, persistent access to exactly:
 #       ~/.opencode
 #       ~/.config/opencode
@@ -151,6 +153,13 @@ fi
 # directory, created here with mode 700. The host's /tmp is a tmpfs, so the
 # contents never reach the disk, but they survive between sessions and can be
 # inspected from outside the sandbox. The host's real /tmp stays hidden.
+#
+# Only non-executable scratch belongs here. TMPDIR is redirected to the
+# private, per-session /dev/shm below, because Bun extracts its OpenTUI
+# renderer to $TMPDIR and dlopen()s it. A shared, persistent TMPDIR can hand a
+# later session a stale or partially written .so, which the loader rejects with
+# "failed to map segment from shared object"; /dev/shm disappears with the
+# sandbox, so that cannot happen there.
 # -------------------------------------------------------------------------
 OPENCODE_TMP="/tmp/opencode"
 if [[ -L "$OPENCODE_TMP" ]]; then
@@ -309,12 +318,13 @@ bwrap \
     --setenv XDG_CACHE_HOME "$REAL_HOME/.cache" \
     --setenv XDG_STATE_HOME "$REAL_HOME/.local/state" \
     --setenv XDG_CONFIG_DIRS "/etc/xdg" \
-    --setenv XDG_RUNTIME_DIR "/tmp" \
+    --setenv XDG_RUNTIME_DIR "/dev/shm" \
     --setenv PATH "$REAL_HOME/.opencode/bin:$PATH" \
     --setenv OPENCODE_TUI_CONFIG "/etc/opencode-tui.json" \
     --setenv LANG "C.UTF-8" \
     --setenv LC_ALL "C.UTF-8" \
-    --setenv TMPDIR "/tmp" \
+    --setenv TMPDIR "/dev/shm" \
+    --setenv BUN_TMPDIR "/dev/shm" \
     --setenv TERM "${TERM:-xterm-256color}" \
     --setenv USER "$REAL_USER" \
     --setenv LOGNAME "$REAL_USER" \
