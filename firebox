@@ -1052,6 +1052,20 @@ printf '%s\n' "$machine_id" > "$TMPFS_RUNTIME/machine-id"
 } > "$TMPFS_RUNTIME/hosts"
 
 # -------------------------------------------------------------------------
+# DNS resolution (copy to avoid symlink issues)
+# -------------------------------------------------------------------------
+if [[ -L /etc/resolv.conf ]]; then
+    RESOLV_TARGET=$(readlink -f /etc/resolv.conf 2>/dev/null || true)
+    if [[ -n "$RESOLV_TARGET" && -r "$RESOLV_TARGET" ]]; then
+        cp "$RESOLV_TARGET" "$TMPFS_RUNTIME/resolv.conf" 2>/dev/null || true
+    fi
+fi
+if [[ ! -f "$TMPFS_RUNTIME/resolv.conf" && -r /etc/resolv.conf ]]; then
+    cp /etc/resolv.conf "$TMPFS_RUNTIME/resolv.conf" 2>/dev/null || true
+fi
+[[ -f "$TMPFS_RUNTIME/resolv.conf" ]] && chmod 644 "$TMPFS_RUNTIME/resolv.conf" 2>/dev/null || true
+
+# -------------------------------------------------------------------------
 # OS spoofing
 # -------------------------------------------------------------------------
 cat > "$TMPFS_RUNTIME/os-release" << 'EOF'
@@ -1467,7 +1481,7 @@ bwrap \
     --ro-bind-try /usr/share/vulkan /usr/share/vulkan \
     \
     --ro-bind-try /etc/ssl /etc/ssl \
-    --ro-bind-try /etc/resolv.conf /etc/resolv.conf \
+    --ro-bind "$TMPFS_RUNTIME/resolv.conf" /etc/resolv.conf \
     --ro-bind "$TMPFS_RUNTIME/passwd" /etc/passwd \
     --ro-bind "$TMPFS_RUNTIME/group" /etc/group \
     --ro-bind "$TMPFS_RUNTIME/hosts" /etc/hosts \
@@ -1495,6 +1509,7 @@ bwrap \
     --bind "$SANDBOX/Documents" "$SANDBOX/Documents" \
     --bind "$SANDBOX/Pictures" "$SANDBOX/Pictures" \
     --bind "$SANDBOX/Desktop" "$SANDBOX/Desktop" \
+    --bind-try /tmp/sandboxes/signal /tmp/sandboxes/signal \
     --bind "$TMPFS_RUNTIME" "$TMPFS_RUNTIME" \
     --bind "$EPHEMERAL_PROFILE" "$EPHEMERAL_PROFILE" \
     \
