@@ -735,10 +735,12 @@ bwrap \
     "${BWRAP_SYS[@]}" \
     --tmpfs "$SANDBOX/.config" \
     "${BWRAP_USER_BINDS[@]}" \
-    --bind "$SANDBOX/Downloads" "$SANDBOX/Downloads" \
-    --bind "$SANDBOX/Documents" "$SANDBOX/Documents" \
-    --bind "$SANDBOX/Pictures" "$SANDBOX/Pictures" \
+    --bind-try "$HOME/Downloads" "$SANDBOX/Downloads" \
+    --bind-try "$HOME/Documents" "$SANDBOX/Documents" \
+    --bind-try "$HOME/Pictures" "$SANDBOX/Pictures" \
     --ro-bind-try "$HOME/Desktop" "$SANDBOX/Desktop" \
+    --ro-bind-try "/home/user/Desktop" "/home/user/Desktop" \
+    --ro-bind-try "/home/audio" "/home/audio" \
     --bind "$TMPFS_RUNTIME" "$TMPFS_RUNTIME" \
     --bind "$HOME/.config/Signal" "/tmp/sandboxes/signal/.config/Signal" \
     \
