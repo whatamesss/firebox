@@ -59,13 +59,13 @@ USE_TMPFS=false
 TMPFS_RUNTIME=""
 
 # Check if /tmp is tmpfs
-tmp_fs_type=$(findmnt -n -o FSTYPE /tmp 2>/dev/null)
+tmp_fs_type=$(findmnt -n -o FSTYPE /tmp 2>/dev/null || true)
 if [[ "$tmp_fs_type" != "tmpfs" ]]; then
     echo "[WARNING] /tmp is not mounted as tmpfs."
 fi
 
 # Check if /tmp is mounted with noexec
-tmp_mount_opts=$(findmnt -n -o OPTIONS /tmp 2>/dev/null)
+tmp_mount_opts=$(findmnt -n -o OPTIONS /tmp 2>/dev/null || true)
 if [[ ! "$tmp_mount_opts" =~ noexec ]]; then
     echo "[WARNING] /tmp is not mounted with the 'noexec' option."
 fi
@@ -110,8 +110,13 @@ cleanup() {
     fi
 }
 
-# Trap on EXIT ensures cleanup runs even on script errors (set -e)
-trap cleanup EXIT INT TERM HUP
+# Trap on EXIT ensures cleanup runs even on script errors (set -e).
+# Signal traps must exit explicitly; otherwise bash resumes the script after
+# cleanup has already removed the runtime dir and stopped the D-Bus proxy.
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+trap 'cleanup; exit 129' HUP
 
 # In shell mode, make Ctrl-C inert. bwrap's --new-session detaches the sandbox
 # from the controlling terminal, so a tty interrupt is delivered to *this*
@@ -151,14 +156,14 @@ fi
 # Unique Runtime Directory
 # -------------------------------------------------------------------------
 if [[ -d /dev/shm ]]; then
-    TMPFS_RUNTIME=$(mktemp -d /dev/shm/firefox-runtime.XXXXXX 2>/dev/null)
+    TMPFS_RUNTIME=$(mktemp -d /dev/shm/firefox-runtime.XXXXXX 2>/dev/null || true)
     if [[ -n "$TMPFS_RUNTIME" && -d "$TMPFS_RUNTIME" ]]; then
         USE_TMPFS=true
     fi
 fi
 
 if [[ "$USE_TMPFS" == false ]]; then
-    TMPFS_RUNTIME=$(mktemp -d /tmp/firefox-runtime.XXXXXX 2>/dev/null)
+    TMPFS_RUNTIME=$(mktemp -d /tmp/firefox-runtime.XXXXXX 2>/dev/null || true)
 fi
 
 if [[ -z "$TMPFS_RUNTIME" || ! -d "$TMPFS_RUNTIME" ]]; then
@@ -247,7 +252,7 @@ if [[ -z "$SOURCE_PROFILE" || ! -d "$SOURCE_PROFILE" ]]; then
             print path
             exit
         }
-    ' "$PROFILES_INI" 2>/dev/null)
+    ' "$PROFILES_INI" 2>/dev/null || true)
 
     if [[ -n "$SOURCE_PROFILE" && "$SOURCE_PROFILE" != /* ]]; then
         SOURCE_PROFILE="${FIREFOX_DIR}/${SOURCE_PROFILE}"
@@ -452,10 +457,16 @@ sanitize_sync_storage
 if [[ -n "$SOURCE_PROFILE" ]] && [[ -f "$SOURCE_PROFILE/places.sqlite" ]]; then
     cp "$SOURCE_PROFILE/places.sqlite" "$EPHEMERAL_PROFILE/places.sqlite"
     sqlite3 "$EPHEMERAL_PROFILE/places.sqlite" <<EOSQL
+        PRAGMA foreign_keys = OFF;
         DELETE FROM moz_historyvisits;
         DELETE FROM moz_inputhistory;
-        UPDATE moz_places SET frecency = -1;
-        UPDATE moz_places SET visit_count = 0;
+        DELETE FROM moz_places
+          WHERE id NOT IN (SELECT fk FROM moz_bookmarks WHERE fk IS NOT NULL)
+            AND id NOT IN (SELECT place_id FROM moz_annos WHERE place_id IS NOT NULL);
+        UPDATE moz_places
+           SET frecency = -1, visit_count = 0, last_visit_date = NULL, typed = 0;
+        DELETE FROM moz_origins
+          WHERE id NOT IN (SELECT origin_id FROM moz_places WHERE origin_id IS NOT NULL);
         VACUUM;
 EOSQL
     (( VERBOSE )) && echo "Bookmarks injected (History sanitized, downloads preserved)."
@@ -754,14 +765,19 @@ EOUJS
 # Dynamic Settings Injection (Direct Line Copy - Safe & Sanitized)
 # We only inject UUIDs and UI Layout. Sidebar defaults to hardcoded above.
 if [[ -n "$SOURCE_PROFILE" && -f "$SOURCE_PROFILE/prefs.js" ]]; then
-    # UUIDs
-    grep -h 'user_pref("extensions.webextensions.uuids"' "$SOURCE_PROFILE/prefs.js" 2>/dev/null | sed 's|//.*||' | tr -d '\n' >> "$EPHEMERAL_PROFILE/user.js" || true
-    # UI State
-    grep -h 'user_pref("browser.uiCustomization.state"' "$SOURCE_PROFILE/prefs.js" 2>/dev/null | sed 's|//.*||' | tr -d '\n' >> "$EPHEMERAL_PROFILE/user.js" || true
-    # UI Backup
-    grep -h 'user_pref("browser.uiCustomization.horizontalTabsBackup"' "$SOURCE_PROFILE/prefs.js" 2>/dev/null | sed 's|//.*||' | tr -d '\n' >> "$EPHEMERAL_PROFILE/user.js" || true
-    # Extension quarantine list (kept in sync from master; remote updates disabled)
-    grep -h 'user_pref("extensions.quarantinedDomains.list"' "$SOURCE_PROFILE/prefs.js" 2>/dev/null | sed 's|//.*||' | tr -d '\n' >> "$EPHEMERAL_PROFILE/user.js" || true
+    # Copy complete prefs.js lines. The old sed/tr pipeline truncated values
+    # containing "//" and concatenated the four lines without separators.
+    emit_pref() {
+        local key="$1"
+        awk -v key="$key" 'index($0, "user_pref(\"" key "\"") == 1' \
+            "$SOURCE_PROFILE/prefs.js" 2>/dev/null || true
+    }
+    {
+        emit_pref "extensions.webextensions.uuids"
+        emit_pref "browser.uiCustomization.state"
+        emit_pref "browser.uiCustomization.horizontalTabsBackup"
+        emit_pref "extensions.quarantinedDomains.list"
+    } >> "$EPHEMERAL_PROFILE/user.js"
 
     (( VERBOSE )) && echo "[Info] Imported UUIDs, UI Layout and quarantine list from prefs.js."
 fi
@@ -1064,6 +1080,9 @@ if [[ ! -f "$TMPFS_RUNTIME/resolv.conf" && -r /etc/resolv.conf ]]; then
     cp /etc/resolv.conf "$TMPFS_RUNTIME/resolv.conf" 2>/dev/null || true
 fi
 [[ -f "$TMPFS_RUNTIME/resolv.conf" ]] && chmod 644 "$TMPFS_RUNTIME/resolv.conf" 2>/dev/null || true
+if [[ ! -f "$TMPFS_RUNTIME/resolv.conf" ]]; then
+    echo "[WARNING] Could not copy /etc/resolv.conf; DNS inside the sandbox may fail." >&2
+fi
 
 # -------------------------------------------------------------------------
 # OS spoofing
@@ -1174,7 +1193,7 @@ if [[ "$HAS_NVIDIA" == true ]]; then
         fi
     done
 
-    NVIDIA_VA_PATH=$(find_va_driver_path nvidia)
+    NVIDIA_VA_PATH=$(find_va_driver_path nvidia || true)
     BWRAP_GPU_ENV=(
         --setenv __NV_PRIME_RENDER_OFFLOAD 1
         --setenv __NV_PRIME_RENDER_OFFLOAD_PROVIDER NVIDIA-G0
@@ -1183,13 +1202,15 @@ if [[ "$HAS_NVIDIA" == true ]]; then
         --setenv GBM_BACKEND nvidia-drm
         --setenv LIBVA_DRIVER_NAME nvidia
 	--setenv NVD_BACKEND direct
+        # NVIDIA's proprietary VA-API driver requires the RDD decoder sandbox
+        # to be disabled; the other GPU paths keep it enabled.
         --setenv MOZ_DISABLE_RDD_SANDBOX 1
 	--setenv MOZ_DISABLE_WAYLAND_DCOMP_SURFACE 1
         --setenv EGL_PLATFORM wayland
     )
     
     if [[ -n "$NVIDIA_LIB_PATH" ]]; then
-        BWRAP_GPU_ENV+=(--setenv LD_LIBRARY_PATH "$NVIDIA_LIB_PATH:${LD_LIBRARY_PATH:-}")
+        BWRAP_GPU_ENV+=(--setenv LD_LIBRARY_PATH "$NVIDIA_LIB_PATH${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}")
         (( VERBOSE )) && echo "Injecting Nvidia Library Path: $NVIDIA_LIB_PATH"
     fi
     [[ -n "$NVIDIA_VA_PATH" ]] && BWRAP_GPU_ENV+=(--setenv LIBVA_DRIVERS_PATH "$NVIDIA_VA_PATH")
@@ -1197,12 +1218,11 @@ if [[ "$HAS_NVIDIA" == true ]]; then
 elif [[ "$HAS_INTEL" == true ]]; then
     INTEL_DRIVER=""
     find_va_driver_path iHD &>/dev/null && INTEL_DRIVER="iHD" || INTEL_DRIVER="i965"
-    INTEL_VA_PATH=$(find_va_driver_path "${INTEL_DRIVER}")
+    INTEL_VA_PATH=$(find_va_driver_path "${INTEL_DRIVER}" || true)
     
     BWRAP_GPU_ENV=(
         --setenv EGL_PLATFORM wayland 
         --setenv LIBVA_DRIVER_NAME "$INTEL_DRIVER"
-        --setenv MOZ_DISABLE_RDD_SANDBOX 1
     )
     
     if [[ -n "$INTEL_VA_PATH" ]]; then
@@ -1210,10 +1230,9 @@ elif [[ "$HAS_INTEL" == true ]]; then
     fi
 
 elif [[ "$HAS_AMD" == true ]]; then
-    AMD_VA_PATH=$(find_va_driver_path radeonsi)
+    AMD_VA_PATH=$(find_va_driver_path radeonsi || true)
     BWRAP_GPU_ENV=(
         --setenv LIBVA_DRIVER_NAME radeonsi
-        --setenv MOZ_DISABLE_RDD_SANDBOX 1
     )
     if [[ -n "$AMD_VA_PATH" ]]; then
         BWRAP_GPU_ENV+=(--setenv LIBVA_DRIVERS_PATH "$AMD_VA_PATH")
@@ -1275,6 +1294,12 @@ BWRAP_LIBS=(--ro-bind-try /usr/lib /usr/lib)
 [[ -d /usr/lib64 ]] && BWRAP_LIBS+=(--ro-bind /usr/lib64 /usr/lib64)
 [[ -d /lib64 ]] && BWRAP_LIBS+=(--ro-bind /lib64 /lib64)
 [[ -d /usr/lib/locale ]] && BWRAP_LIBS+=(--ro-bind /usr/lib/locale /usr/lib/locale)
+# Preserve /lib across merged-/usr (symlink) and split-/usr (real dir) layouts.
+if [[ -L /lib ]]; then
+    BWRAP_LIBS+=(--symlink "$(readlink /lib)" /lib)
+elif [[ -d /lib ]]; then
+    BWRAP_LIBS+=(--ro-bind /lib /lib)
+fi
 
 BWRAP_MULTIARCH=()
 shopt -s nullglob
@@ -1298,7 +1323,7 @@ for pw_socket in "$XDG_RUNTIME_DIR"/pipewire-*; do
 done
 shopt -u nullglob
 for dev in /dev/v4l2loopback /dev/video*; do
-    [[ -e "$dev" ]] && BWRAP_AV+=(--dev-bind "$dev" "$dev")
+    [[ -e "$dev" ]] && BWRAP_AV+=(--dev-bind-try "$dev" "$dev")
 done
 
 # -------------------------------------------------------------------------
@@ -1313,7 +1338,6 @@ BWRAP_PRINT=(
 # Sys Tree
 # -------------------------------------------------------------------------
 BWRAP_SYS=(
-    --tmpfs /sys
     --ro-bind-try /sys/class/video4linux /sys/class/video4linux
     --ro-bind-try /sys/devices/virtual/video4linux /sys/devices/virtual/video4linux
     --ro-bind-try /sys/bus/pci /sys/bus/pci
@@ -1355,6 +1379,9 @@ fi
 for dir in "$SANDBOX" "$SANDBOX/.local" "$SANDBOX/Downloads" "$SANDBOX/Documents" "$SANDBOX/Pictures" "$SANDBOX/Desktop"; do
     mkdir -p "$dir"
 done
+# Downloads/Documents/Pictures/Desktop are kept between runs; restrict the
+# tree to the current user so other local users cannot read it.
+chmod 700 "$SANDBOX"
 
 # -------------------------------------------------------------------------
 # Build Input Method & GPU Env Array
@@ -1451,10 +1478,17 @@ bwrap \
     --unsetenv NVD_BACKEND \
     --unsetenv SESSION_MANAGER \
     --unsetenv ICEAUTHORITY \
-    ${BWRAP_IM[@]} \
+    --unsetenv DISPLAY \
+    --unsetenv XAUTHORITY \
+    --unsetenv LD_PRELOAD \
+    --unsetenv PULSE_SERVER \
+    --unsetenv PIPEWIRE_REMOTE \
+    --unsetenv PIPEWIRE_RUNTIME_DIR \
+    "${BWRAP_IM[@]}" \
     "${BWRAP_GPU_ENV[@]}" \
     \
     --proc /proc \
+    --tmpfs /sys \
     "${BWRAP_PROC_GPU[@]}" \
     --tmpfs /tmp \
     --dev /dev \
@@ -1481,7 +1515,7 @@ bwrap \
     --ro-bind-try /usr/share/vulkan /usr/share/vulkan \
     \
     --ro-bind-try /etc/ssl /etc/ssl \
-    --ro-bind "$TMPFS_RUNTIME/resolv.conf" /etc/resolv.conf \
+    --ro-bind-try "$TMPFS_RUNTIME/resolv.conf" /etc/resolv.conf \
     --ro-bind "$TMPFS_RUNTIME/passwd" /etc/passwd \
     --ro-bind "$TMPFS_RUNTIME/group" /etc/group \
     --ro-bind "$TMPFS_RUNTIME/hosts" /etc/hosts \
@@ -1509,7 +1543,6 @@ bwrap \
     --bind "$SANDBOX/Documents" "$SANDBOX/Documents" \
     --bind "$SANDBOX/Pictures" "$SANDBOX/Pictures" \
     --bind "$SANDBOX/Desktop" "$SANDBOX/Desktop" \
-    --bind-try /tmp/sandboxes/signal /tmp/sandboxes/signal \
     --bind "$TMPFS_RUNTIME" "$TMPFS_RUNTIME" \
     --bind "$EPHEMERAL_PROFILE" "$EPHEMERAL_PROFILE" \
     \
