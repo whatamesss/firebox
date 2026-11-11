@@ -4,14 +4,32 @@ set -euo pipefail
 # -------------------------------------------------------------------------
 # Argument parsing
 # -------------------------------------------------------------------------
+usage() {
+    cat <<'EOF'
+Usage: firebox [OPTIONS] [URL [FIREFOX_ARGS...]]
+
+Options:
+  -v, --verbose   Show commands as they run
+      --shell     Open a shell inside the sandbox instead of Firefox
+  -h, --help      Show this help and exit
+  --              Treat all remaining arguments as positional
+EOF
+}
+
 VERBOSE=0
 SHELL_MODE=0
-for arg in "$@"; do
-    if [[ "$arg" == "-v" || "$arg" == "--verbose" ]]; then
-        VERBOSE=1
-    elif [[ "$arg" == "--shell" ]]; then
-        SHELL_MODE=1
-    fi
+URL="about:blank"
+REMAINING_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -v|--verbose) VERBOSE=1; shift ;;
+        --shell)      SHELL_MODE=1; shift ;;
+        -h|--help)    usage; exit 0 ;;
+        --)           shift; REMAINING_ARGS+=("$@"); break ;;
+        -*)           echo "firebox: unknown option: $1" >&2; usage >&2; exit 2 ;;
+        *)            REMAINING_ARGS+=("$1"); shift ;;
+    esac
 done
 
 if (( VERBOSE )); then
@@ -27,20 +45,13 @@ XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 # -------------------------------------------------------------------------
 # URL handling
 # -------------------------------------------------------------------------
-URL="about:blank"
-REMAINING_ARGS=()
-
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        -v|--verbose) shift ;;
-        --shell) shift ;;
-        *) REMAINING_ARGS+=("$1") ; shift ;;
-    esac
-done
-
 if [[ -n "${REMAINING_ARGS[0]:-}" ]]; then
     case "${REMAINING_ARGS[0]}" in
         http://*|https://*|about:*|file://*)
+            URL="${REMAINING_ARGS[0]}" ;;
+        localhost[:/]*|127.0.0.1[:/]*|\[::1\][:/]*)
+            URL="http://${REMAINING_ARGS[0]}" ;;
+        -*)
             URL="${REMAINING_ARGS[0]}" ;;
         *)
             URL="https://${REMAINING_ARGS[0]}" ;;
@@ -138,11 +149,9 @@ for cmd in bwrap xdg-dbus-proxy rsync awk file sqlite3 findmnt; do
     fi
 done
 
-for cmd in uuidgen jq; do
-    if ! command -v "$cmd" &>/dev/null; then
-        echo "Warning: '$cmd' not available; some features may be degraded." >&2
-    fi
-done
+if ! command -v jq &>/dev/null; then
+    echo "Warning: 'jq' not available; extension token scrubbing is disabled." >&2
+fi
 
 # -------------------------------------------------------------------------
 # Wayland check
@@ -460,6 +469,11 @@ if [[ -n "$SOURCE_PROFILE" ]] && [[ -f "$SOURCE_PROFILE/places.sqlite" ]]; then
         PRAGMA foreign_keys = OFF;
         DELETE FROM moz_historyvisits;
         DELETE FROM moz_inputhistory;
+        -- Download history lives in moz_annos as downloads/* annotations.
+        DELETE FROM moz_annos
+          WHERE anno_attribute_id IN (
+              SELECT id FROM moz_anno_attributes WHERE name LIKE 'downloads/%'
+          );
         DELETE FROM moz_places
           WHERE id NOT IN (SELECT fk FROM moz_bookmarks WHERE fk IS NOT NULL)
             AND id NOT IN (SELECT place_id FROM moz_annos WHERE place_id IS NOT NULL);
@@ -469,7 +483,7 @@ if [[ -n "$SOURCE_PROFILE" ]] && [[ -f "$SOURCE_PROFILE/places.sqlite" ]]; then
           WHERE id NOT IN (SELECT origin_id FROM moz_places WHERE origin_id IS NOT NULL);
         VACUUM;
 EOSQL
-    (( VERBOSE )) && echo "Bookmarks injected (History sanitized, downloads preserved)."
+    (( VERBOSE )) && echo "Bookmarks injected (history and download history removed)."
 fi
 
 # Purge sensitive auth/cookie/autofill data - only bookmarks and extension configs retained
@@ -619,7 +633,7 @@ user_pref("privacy.globalprivacycontrol.enabled", true);
 user_pref("privacy.antitracking.isolateContentScriptResources", true);
 user_pref("browser.contentblocking.category", "custom");
 user_pref("pref.privacy.disable_button.tracking_protection_exceptions", true);
-user_pref("network.cookie.cookieBehavior", 1);
+user_pref("network.cookie.cookieBehavior", 5);
 user_pref("network.cookie.lifetimePolicy", 2);
 user_pref("privacy.trackingprotection.enabled", true);
 user_pref("privacy.trackingprotection.pbmode.enabled", true);
@@ -1046,13 +1060,13 @@ printf '%s\n' "$machine_id" > "$TMPFS_RUNTIME/machine-id"
         "firefox-settings-attachments.cdn.mozilla.net"
         "content-signature-2.cdn.mozilla.net"
         "services.addons.mozilla.org"
-        "blocklists.settings.mozilla.com"
+        "blocklists.settings.services.mozilla.com"
         "aus5.mozilla.org"
         "location.services.mozilla.com"
         "detectportal.firefox.com"
         "tiles.services.mozilla.com"
-        "shavar.services.mozilla.org"
-        "push.services.mozilla.org"
+        "shavar.services.mozilla.com"
+        "push.services.mozilla.com"
         "telemetry.mozilla.org"
         "incoming.telemetry.mozilla.org"
         "performance.mozilla.org"
@@ -1098,7 +1112,7 @@ HOME_URL="https://www.ubuntu.com/"
 SUPPORT_URL="https://help.ubuntu.com/"
 BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
 PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
-UBUNTU_CODENAME=noble
+UBUNTU_CODENAME=resolute
 EOF
 
 BWRAP_OVERRIDES=()

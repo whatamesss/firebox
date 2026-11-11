@@ -6,7 +6,7 @@ This is a comprehensive Bash script named firebox designed to launch a heavily s
 Here is a breakdown of what the script does:
 1. Core Concept
 
-The script creates a temporary "sandbox" environment. It copies your existing Firefox profile (bookmarks, extensions, and preferences) into a temporary directory (usually in RAM via /dev/shm or /tmp), sanitizes it (removes history and cookies), applies strict privacy settings, and then launches Firefox inside this isolated environment. Any changes made during the session are discarded when the browser closes.
+The script creates a temporary "sandbox" environment. It copies your existing Firefox profile (bookmarks, extensions, and preferences) into a temporary directory (usually in RAM via /dev/shm or /tmp), sanitizes it (removes history, download history, and cookies), applies strict privacy settings, and then launches Firefox inside this isolated environment. Any changes made during the session are discarded when the browser closes.
 2. Key Features & Workflow
 
      
@@ -17,9 +17,9 @@ The script creates a temporary "sandbox" environment. It copies your existing Fi
      
 
     Data Sanitization:
-         Bookmarks: Syncs places.sqlite from the master profile but uses sqlite3 to delete all history (moz_historyvisits) and reset visit counts, keeping only the bookmarks.
+         Bookmarks: Syncs places.sqlite from the master profile but uses sqlite3 to delete all history (moz_historyvisits), download history (downloads/* annotations), and reset visit counts, keeping only the bookmarks.
          Extensions: Syncs extension files and their specific storage (IndexedDB for moz-extension++*) while excluding website storage (http*, https*).
-         Extension UUIDs: Uses sed to copy the extension UUID mapping from the master profile so extensions recognize their ID in the new profile.
+         Extension UUIDs: Copies the extension UUID mapping from the master profile so extensions recognize their ID in the new profile.
      
 
     Privacy Hardening (user.js & policies.json):
@@ -70,8 +70,7 @@ The script requires the following tools installed on the system:
      awk
      file
      findmnt
-     uuidgen (optional)
-     jq (optional; scrubs tokens from synced extension storage)
+     jq (scrubs tokens from extension storage)
 
 5. Usage
 

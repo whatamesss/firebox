@@ -14,9 +14,10 @@ detail by its own `*-readme.txt`.
 ## The scripts
 
 ### firebox — sandboxed, ephemeral, privacy-hardened Firefox
-Copies your real profile into a fresh session directory in RAM, strips history
-and cookies from it, injects a strict privacy `user.js` and a locked-down
-`policies.json`, then launches Firefox under `bwrap`: read-only system mounts,
+Copies your real profile into a fresh session directory in RAM, strips history,
+download history and cookies from it, injects a strict privacy `user.js` and a
+locked-down `policies.json`, then launches Firefox under `bwrap`: read-only
+system mounts,
 a filtered D-Bus proxy, a custom `/etc/hosts` that blocks telemetry endpoints,
 and auto-detected NVIDIA/AMD/Intel acceleration. Everything is discarded on
 exit.
@@ -57,8 +58,9 @@ in the directory the launcher was invoked from.
 
 Linux with a Wayland session, plus `bwrap` (Bubblewrap). Individual scripts add
 their own tools — commonly `xdg-dbus-proxy`, `rsync`, `awk`, `file`, `sqlite3`
-and `findmnt`, with `jq` and `uuidgen` optional. `firebox-signal` and
-`firebox-opencode` also use `proxychains` when it is installed.
+and `findmnt`, with `jq` required for extension token scrubbing and `uuidgen`
+optional. `firebox-signal` and `firebox-opencode` also use `proxychains` when
+it is installed.
 
 ## Installation
 

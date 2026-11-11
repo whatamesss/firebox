@@ -22,6 +22,7 @@ RDEPEND="
 	dev-db/sqlite
 	net-misc/rsync
 	app-alternatives/awk
+	app-misc/jq
 "
 
 src_install() {
@@ -40,7 +41,6 @@ src_install() {
 
 pkg_postinst() {
 	optfeature "routing sandboxed egress through a proxy" net-misc/proxychains
-	optfeature "scrubbing tokens from synced extension storage (firebox)" app-misc/jq
 
 	elog "Firebox only provides the sandboxes; the applications it launches"
 	elog "are installed separately, for example:"
