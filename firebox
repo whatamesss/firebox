@@ -61,11 +61,10 @@ fi
 # -------------------------------------------------------------------------
 # Sandbox preparation
 # -------------------------------------------------------------------------
-SANDBOXES="/tmp/sandboxes" 
+SANDBOXES="/tmp/sandboxes"
 SANDBOX="${SANDBOXES}/firefox"
 EPHEMERAL_PROFILE=""
 PROXY_PID=""
-EXIT_CODE=0
 USE_TMPFS=false
 TMPFS_RUNTIME=""
 
@@ -79,14 +78,6 @@ fi
 tmp_mount_opts=$(findmnt -n -o OPTIONS /tmp 2>/dev/null || true)
 if [[ ! "$tmp_mount_opts" =~ noexec ]]; then
     echo "[WARNING] /tmp is not mounted with the 'noexec' option."
-fi
-
-# Check if SANDBOX is located inside HOME
-HOME_CLEAN="${HOME%/}"
-if [[ -n "$SANDBOX" ]] && [[ "$SANDBOX" == "${HOME_CLEAN}/"* ]]; then
-    echo "[WARNING] \$SANDBOX is located inside \$HOME (${SANDBOX})."
-    echo "          This creates security implications. If the sandbox is compromised,"
-    echo "          it could potentially escape and access user data."
 fi
 
 # -------------------------------------------------------------------------
@@ -322,7 +313,8 @@ done
 
 # 2. Copy Extension Registry
 if [[ -n "$SOURCE_PROFILE" ]] && [[ -f "$SOURCE_PROFILE/extensions.json" ]]; then
-    cp "$SOURCE_PROFILE/extensions.json" "$EPHEMERAL_PROFILE/extensions.json"
+    cp "$SOURCE_PROFILE/extensions.json" "$EPHEMERAL_PROFILE/extensions.json" \
+        || { echo "Error: Failed to copy extensions.json" >&2; exit 1; }
 fi
 
 # 3. Copy Extension Preferences / Settings
@@ -331,14 +323,16 @@ for file in \
     extension-settings.json
 do
     if [[ -f "$SOURCE_PROFILE/$file" ]]; then
-        cp "$SOURCE_PROFILE/$file" "$EPHEMERAL_PROFILE/$file"
+        cp "$SOURCE_PROFILE/$file" "$EPHEMERAL_PROFILE/$file" \
+            || { echo "Error: Failed to copy $file" >&2; exit 1; }
     fi
 done
 
 # 4. Copy Extension Storage Data (needed for extension configs like uBlock Origin)
 # This contains per-extension settings, NOT site cookies (cookies are in cookies.sqlite which we purge)
 if [[ -d "$SOURCE_PROFILE/browser-extension-data" ]]; then
-    rsync -a "$SOURCE_PROFILE/browser-extension-data" "$EPHEMERAL_PROFILE/" || echo "Warning: Failed to sync extension data" >&2
+    rsync -a "$SOURCE_PROFILE/browser-extension-data" "$EPHEMERAL_PROFILE/" \
+        || { echo "Error: Failed to sync extension data" >&2; exit 1; }
 fi
 
 # 4b. Copy IndexedDB/LocalStorage for extensions only (moz-extension+++) from storage/
@@ -352,14 +346,16 @@ if [[ -d "$SOURCE_PROFILE/storage" ]]; then
         # Only copy extension storage, skip site data
         for ext in "$src"/moz-extension+++* "$src"/chrome* "$src"/resource*; do
             [[ -e "$ext" ]] || continue
-            rsync -a "$ext" "$EPHEMERAL_PROFILE/storage/$base/" || true
+            rsync -a "$ext" "$EPHEMERAL_PROFILE/storage/$base/" \
+                || { echo "Error: Failed to copy extension storage $(basename "$ext")" >&2; exit 1; }
         done
     done
 fi
 
 # 5. Copy storage-sync-v2.sqlite only (for browser.storage.sync) if present
 if [[ -f "$SOURCE_PROFILE/storage-sync-v2.sqlite" ]]; then
-    cp "$SOURCE_PROFILE/storage-sync-v2.sqlite" "$EPHEMERAL_PROFILE/storage-sync-v2.sqlite"
+    cp "$SOURCE_PROFILE/storage-sync-v2.sqlite" "$EPHEMERAL_PROFILE/storage-sync-v2.sqlite" \
+        || { echo "Error: Failed to copy storage-sync-v2.sqlite" >&2; exit 1; }
     for ext in -wal -shm -journal; do
         [[ -f "$SOURCE_PROFILE/storage-sync-v2.sqlite$ext" ]] && cp "$SOURCE_PROFILE/storage-sync-v2.sqlite$ext" "$EPHEMERAL_PROFILE/storage-sync-v2.sqlite$ext" 2>/dev/null || true
     done
@@ -912,6 +908,10 @@ fi
 # -------------------------------------------------------------------------
 # Start DBus proxy
 # -------------------------------------------------------------------------
+# Keep proxy diagnostics quiet normally, but visible with -v.
+proxy_stderr=/dev/null
+(( VERBOSE )) && proxy_stderr=/dev/stderr
+
 # Only org.freedesktop.portal.Desktop is a real bus name; the rest are
 # interfaces exposed on it. Grant visibility of the name, then allow only the
 # specific portal interfaces Firefox needs (plus the async Request response and
@@ -929,7 +929,7 @@ xdg-dbus-proxy "$DBUS_SESSION_BUS_ADDRESS" \
     --call=org.freedesktop.portal.Desktop=org.freedesktop.portal.Request.* \
     --broadcast=org.freedesktop.portal.Desktop=org.freedesktop.portal.Request.*@/org/freedesktop/portal/desktop/* \
     --broadcast=org.freedesktop.portal.Desktop=org.freedesktop.portal.Settings.*@/org/freedesktop/portal/desktop \
-    >/dev/null 2>&1 &
+    >/dev/null 2>"$proxy_stderr" &
 
 PROXY_PID=$!
 
@@ -1119,7 +1119,15 @@ BWRAP_OVERRIDES=()
 mkdir -p "$TMPFS_RUNTIME/distribution"
 cp "$TMPFS_RUNTIME/policies.json" "$TMPFS_RUNTIME/distribution/policies.json"
 cp "$TMPFS_RUNTIME/distribution.ini" "$TMPFS_RUNTIME/distribution/distribution.ini"
-BWRAP_OVERRIDES+=(--ro-bind "$TMPFS_RUNTIME/distribution" "$MOZ_INSTALL_DIR/distribution")
+# Linux Firefox with MOZ_SYSTEM_POLICIES reads /etc/policies/policies.json
+# first, then <install>/distribution/policies.json.
+BWRAP_OVERRIDES+=(
+    --dir /etc/policies
+    --ro-bind "$TMPFS_RUNTIME/distribution/policies.json" /etc/policies/policies.json
+)
+if [[ -d "$MOZ_INSTALL_DIR/distribution" ]]; then
+    BWRAP_OVERRIDES+=(--ro-bind "$TMPFS_RUNTIME/distribution" "$MOZ_INSTALL_DIR/distribution")
+fi
 
 # -------------------------------------------------------------------------
 # Hardware Detection
@@ -1273,8 +1281,6 @@ BWRAP_GRAPHICS_SHARES=(
     --ro-bind-try /usr/lib/vulkan /usr/lib/vulkan
     --ro-bind-try /usr/lib/x86_64-linux-gnu/vulkan /usr/lib/x86_64-linux-gnu/vulkan
     --ro-bind-try /usr/lib/i386-linux-gnu/vulkan /usr/lib/i386-linux-gnu/vulkan
-    --ro-bind-try /etc/vulkan /etc/vulkan
-    --ro-bind-try /usr/share/vulkan /usr/share/vulkan
 )
 
 BWRAP_PROC_GPU=()
@@ -1565,6 +1571,3 @@ bwrap \
     \
     --chdir "$SANDBOX" \
     "${BWRAP_CMD[@]}"
-
-EXIT_CODE=$?
-exit $EXIT_CODE

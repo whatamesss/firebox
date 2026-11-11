@@ -13,7 +13,10 @@ The script creates a temporary "sandbox" environment. It copies your existing Fi
 
     Ephemeral Profile:
          Creates a unique temporary runtime directory (TMPFS_RUNTIME) for every session.
-         Copies the user's "master" profile into this directory so settings and extensions persist across sessions but are isolated from the actual disk writes of the main browser.
+         Copies the user's "master" profile into this directory so bookmarks,
+         settings, and extension configuration are available in every session.
+         Changes made inside the sandbox are never written back to the master
+         profile.
      
 
     Data Sanitization:
