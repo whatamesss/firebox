@@ -10,6 +10,7 @@ set -euo pipefail
 # in the directory you invoked the launcher from (when that directory is inside
 # ~/projects). The sandbox starts from an empty root and only exposes:
 #   * read-only system trees (libs, certs, timezone, toolchains, ...)
+#   * synthesized /etc/passwd, /etc/group, /etc/hosts and /etc/machine-id
 #   * /tmp backed by a dedicated host directory (/tmp/opencode), plus a
 #     private, ephemeral /dev/shm which also backs TMPDIR (Bun unpacks its
 #     native renderer into $TMPDIR and dlopen()s it, so executable payloads
@@ -25,17 +26,34 @@ set -euo pipefail
 #   * no Wayland, no D-Bus, no GPU, no audio, no X11, no desktop portals.
 # -------------------------------------------------------------------------
 
+usage() {
+    cat <<'EOF'
+Usage: firebox-opencode [OPTIONS] [--] [OPENCODE_ARGS...]
+
+Options:
+  -v, --verbose   Show commands as they run
+      --no-proxy  Ignore proxychains and connect directly
+  -h, --help      Show this help and exit
+  --              Treat all remaining arguments as opencode arguments
+
+All other arguments are forwarded to opencode.
+EOF
+}
+
 # -------------------------------------------------------------------------
 # Argument parsing
 # -------------------------------------------------------------------------
 VERBOSE=0
 NO_PROXY=0
 OPENCODE_ARGS=()
-for arg in "$@"; do
-    case "$arg" in
-        -v|--verbose) VERBOSE=1 ;;
-        --no-proxy) NO_PROXY=1 ;;
-        *) OPENCODE_ARGS+=("$arg") ;;
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -v|--verbose) VERBOSE=1; shift ;;
+        --no-proxy)   NO_PROXY=1; shift ;;
+        -h|--help)    usage; exit 0 ;;
+        --)           shift; OPENCODE_ARGS+=("$@"); break ;;
+        *)            OPENCODE_ARGS+=("$1"); shift ;;
     esac
 done
 
@@ -56,6 +74,19 @@ PROJECTS_DIR="$REAL_HOME/projects"
 EXIT_CODE=0
 REAL_USER="${USER:-$(whoami)}"
 
+# Pick an available UTF-8 locale to prevent bash/locale warnings regardless of
+# system config. C.UTF-8 is built into modern glibc but absent on older/musl
+# systems, so fall back gracefully.
+SYSTEM_LOCALE=""
+for loc in C.UTF-8 C.utf8 en_US.UTF-8 en_US.utf8; do
+    if locale -a 2>/dev/null | grep -qix "${loc//./\\.}"; then
+        SYSTEM_LOCALE="$loc"
+        break
+    fi
+done
+SYSTEM_LOCALE="${SYSTEM_LOCALE:-C}"
+(( VERBOSE )) && echo "System Locale set to: $SYSTEM_LOCALE"
+
 # Synthetic /etc/passwd and /etc/group (never the host's), so the sandbox
 # exposes only the launching user and no real host account list.
 OPENCODE_RUNTIME=""
@@ -63,7 +94,7 @@ if [[ -d /dev/shm ]]; then
     OPENCODE_RUNTIME=$(mktemp -d /dev/shm/opencode-runtime.XXXXXX 2>/dev/null || true)
 fi
 if [[ -z "$OPENCODE_RUNTIME" ]]; then
-    OPENCODE_RUNTIME=$(mktemp -d /tmp/opencode-runtime.XXXXXX)
+    OPENCODE_RUNTIME=$(mktemp -d /tmp/opencode-runtime.XXXXXX 2>/dev/null || true)
 fi
 if [[ -z "$OPENCODE_RUNTIME" || ! -d "$OPENCODE_RUNTIME" ]]; then
     echo "Error: Failed to create runtime directory in /dev/shm or /tmp." >&2
@@ -75,11 +106,58 @@ cleanup() {
     fi
     return 0
 }
-trap cleanup EXIT INT TERM HUP
+# Signal traps must exit explicitly; otherwise bash resumes the script after
+# cleanup has already removed the runtime dir and its bind-mount sources.
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+trap 'cleanup; exit 129' HUP
 
 printf '%s:x:%s:%s:%s:%s:/bin/false\n' \
     "$REAL_USER" "$(id -u)" "$(id -g)" "$REAL_USER" "$REAL_HOME" > "$OPENCODE_RUNTIME/passwd"
 printf '%s:x:%s:\n' "$REAL_USER" "$(id -g)" > "$OPENCODE_RUNTIME/group"
+
+# Random per-session machine-id (never the host's persistent identifier).
+machine_id=""
+if [[ -r /dev/urandom ]]; then
+    if command -v od &>/dev/null; then
+        machine_id=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    elif command -v xxd &>/dev/null; then
+        machine_id=$(head -c 16 /dev/urandom | xxd -p -c 16)
+    elif command -v hexdump &>/dev/null; then
+        machine_id=$(head -c 16 /dev/urandom | hexdump -ve '1/1 "%02x"')
+    else
+        machine_id=$(dd if=/dev/urandom bs=16 count=1 2>/dev/null | base64 | tr -d '=+/\n' | cut -c1-32)
+    fi
+else
+    machine_id=$(date +%s%N 2>/dev/null | sha256sum 2>/dev/null | awk '{print $1}' | cut -c1-32)
+fi
+[[ -z "$machine_id" ]] && machine_id="00000000000000000000000000000000"
+printf '%s\n' "$machine_id" > "$OPENCODE_RUNTIME/machine-id"
+
+# Synthetic /etc/hosts: localhost plus any host 0.0.0.0 blocks, without
+# exposing the rest of the host's hostname map.
+{
+    echo "127.0.0.1 localhost"
+    echo "::1 localhost"
+    grep -E '^\s*0\.0\.0\.0\s' /etc/hosts 2>/dev/null || true
+} > "$OPENCODE_RUNTIME/hosts"
+
+# Copy the DNS configuration to avoid a dangling symlink when /etc/resolv.conf
+# points into a directory that is not mounted in the sandbox.
+if [[ -L /etc/resolv.conf ]]; then
+    RESOLV_TARGET=$(readlink -f /etc/resolv.conf 2>/dev/null || true)
+    if [[ -n "$RESOLV_TARGET" && -r "$RESOLV_TARGET" ]]; then
+        cp "$RESOLV_TARGET" "$OPENCODE_RUNTIME/resolv.conf" 2>/dev/null || true
+    fi
+fi
+if [[ ! -f "$OPENCODE_RUNTIME/resolv.conf" && -r /etc/resolv.conf ]]; then
+    cp /etc/resolv.conf "$OPENCODE_RUNTIME/resolv.conf" 2>/dev/null || true
+fi
+[[ -f "$OPENCODE_RUNTIME/resolv.conf" ]] && chmod 644 "$OPENCODE_RUNTIME/resolv.conf" 2>/dev/null || true
+if [[ ! -f "$OPENCODE_RUNTIME/resolv.conf" ]]; then
+    echo "[WARNING] Could not copy /etc/resolv.conf; DNS inside the sandbox may fail." >&2
+fi
 
 # TUI keybind overlay: drop Ctrl-C from both app_exit and input_clear so it
 # can no longer quit or clear the prompt; leave the session with /quit (or
@@ -118,6 +196,12 @@ done
 # -------------------------------------------------------------------------
 if ! command -v bwrap &>/dev/null; then
     echo "Error: Required command 'bwrap' not found" >&2
+    exit 1
+fi
+
+if ! command -v opencode &>/dev/null \
+   && [[ ! -x "$REAL_HOME/.opencode/bin/opencode" ]]; then
+    echo "Error: Required command 'opencode' not found (expected in PATH or at ~/.opencode/bin/opencode)." >&2
     exit 1
 fi
 
@@ -202,10 +286,15 @@ BWRAP_LIBS=(
     --ro-bind-try /opt /opt
     --ro-bind-try /usr/lib /usr/lib
     --ro-bind-try /usr/lib64 /usr/lib64
-    --ro-bind-try /lib /lib
     --ro-bind-try /lib64 /lib64
     --ro-bind-try /usr/lib/locale /usr/lib/locale
 )
+# Preserve /lib across merged-/usr (symlink) and split-/usr (real dir) layouts.
+if [[ -L /lib ]]; then
+    BWRAP_LIBS+=(--symlink "$(readlink /lib)" /lib)
+elif [[ -d /lib ]]; then
+    BWRAP_LIBS+=(--ro-bind /lib /lib)
+fi
 
 BWRAP_MULTIARCH=()
 shopt -s nullglob
@@ -214,6 +303,13 @@ for arch_dir in /usr/lib/*-linux-gnu; do
 done
 shopt -u nullglob
 
+BWRAP_RESOLV=()
+if [[ -f "$OPENCODE_RUNTIME/resolv.conf" ]]; then
+    BWRAP_RESOLV+=(--ro-bind "$OPENCODE_RUNTIME/resolv.conf" /etc/resolv.conf)
+else
+    BWRAP_RESOLV+=(--ro-bind-try /etc/resolv.conf /etc/resolv.conf)
+fi
+
 BWRAP_ETC=(
     --ro-bind-try /etc/ld.so.cache /etc/ld.so.cache
     --ro-bind-try /etc/ld.so.conf /etc/ld.so.conf
@@ -221,10 +317,10 @@ BWRAP_ETC=(
     --ro-bind-try /etc/ssl /etc/ssl
     --ro-bind-try /etc/pki /etc/pki
     --ro-bind-try /etc/ca-certificates /etc/ca-certificates
-    --ro-bind-try /etc/resolv.conf /etc/resolv.conf
+    "${BWRAP_RESOLV[@]}"
     --ro-bind-try /etc/nsswitch.conf /etc/nsswitch.conf
-    --ro-bind-try /etc/hosts /etc/hosts
-    --ro-bind-try /etc/machine-id /etc/machine-id
+    --ro-bind "$OPENCODE_RUNTIME/hosts" /etc/hosts
+    --ro-bind "$OPENCODE_RUNTIME/machine-id" /etc/machine-id
     --ro-bind-try /etc/localtime /etc/localtime
     --ro-bind-try /etc/terminfo /etc/terminfo
     --ro-bind-try /etc/inputrc /etc/inputrc
@@ -340,8 +436,8 @@ bwrap \
     --setenv XDG_RUNTIME_DIR "/run/user/$(id -u)" \
     --setenv PATH "$REAL_HOME/.opencode/bin:$PATH" \
     --setenv OPENCODE_TUI_CONFIG "/etc/opencode-tui.json" \
-    --setenv LANG "C.UTF-8" \
-    --setenv LC_ALL "C.UTF-8" \
+    --setenv LANG "$SYSTEM_LOCALE" \
+    --setenv LC_ALL "$SYSTEM_LOCALE" \
     --setenv TMPDIR "/dev/shm" \
     --setenv BUN_TMPDIR "/dev/shm" \
     --setenv TERM "${TERM:-xterm-256color}" \
@@ -352,14 +448,26 @@ bwrap \
     --unsetenv WAYLAND_DISPLAY \
     --unsetenv XAUTHORITY \
     --unsetenv DBUS_SESSION_BUS_ADDRESS \
+    --unsetenv PULSE_SERVER \
+    --unsetenv PIPEWIRE_REMOTE \
+    --unsetenv PIPEWIRE_RUNTIME_DIR \
     --unsetenv SSH_AUTH_SOCK \
     --unsetenv GNUPGHOME \
     --unsetenv GPG_AGENT_INFO \
+    --unsetenv SESSION_MANAGER \
+    --unsetenv ICEAUTHORITY \
     --unsetenv KDE_FULL_SESSION \
     --unsetenv KDE_SESSION_VERSION \
     --unsetenv KDE_SESSION_UID \
     --unsetenv KDE_APPLICATIONS_AS_SCOPE \
     --unsetenv _KDE_APPLICATIONS_AS_FORKING \
+    --unsetenv KGLOBALACCELD_PLATFORM \
+    --unsetenv XDG_MENU_PREFIX \
+    --unsetenv LANGUAGE \
+    --unsetenv CONFIG_PROTECT_MASK \
+    --unsetenv CONFIG_PROTECT \
+    --unsetenv PKG_CONFIG_PATH \
+    --unsetenv NVD_BACKEND \
     --unsetenv LD_PRELOAD \
     --unsetenv PROXYCHAINS_CONF_FILE \
     --unsetenv PROXYCHAINS_QUIET_MODE \

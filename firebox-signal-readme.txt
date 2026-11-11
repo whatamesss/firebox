@@ -19,8 +19,10 @@ created during the session is discarded when Signal exits.
      Ephemeral runtime:
           Creates a unique runtime directory (TMPFS_RUNTIME), preferring
           /dev/shm and falling back to /tmp. It holds a synthesized
-          /etc/passwd, /etc/group and /etc/machine-id plus a custom /etc/hosts.
-          A cleanup trap removes it on exit.
+          /etc/passwd, /etc/group and a random per-session /etc/machine-id,
+          a custom /etc/hosts, and a copy of /etc/resolv.conf (so a host
+          symlink into an unmounted directory cannot break DNS). A cleanup
+          trap removes it on exit.
 
      Hardware acceleration:
           Detects NVIDIA, AMD, or Intel GPUs; binds the relevant /dev/dri and
@@ -41,7 +43,8 @@ created during the session is discarded when Signal exits.
           StatusNotifierWatcher.
 
      Persistent state:
-          ~/.config/Signal is bound read-write; /opt/Signal is bound read-only.
+          ~/.config/Signal is created if necessary and bound read-write;
+          /opt/Signal is bound read-only.
 
 3. Isolation
 
@@ -51,8 +54,10 @@ created during the session is discarded when Signal exits.
 
      Filesystem:
           System directories are mounted read-only. A custom /etc/hosts is
-          synthesized (localhost entries plus any host 0.0.0.0 entries), and
-          the identity files are regenerated per session.
+          synthesized (localhost entries plus any host 0.0.0.0 entries),
+          /etc/resolv.conf is copied rather than bind-mounted, and the
+          identity files (passwd, group, machine-id) are regenerated per
+          session. The persistent sandbox tree is mode 0700.
 
      Network:
           The network namespace is not unshared. If proxychains is present,
@@ -63,15 +68,20 @@ created during the session is discarded when Signal exits.
      bwrap (Bubblewrap)
      xdg-dbus-proxy
      findmnt
+     signal-desktop
      proxychains (optional; proxychains4 on Debian/Ubuntu)
-     uuidgen (optional; random per-session machine-id)
-     jq (optional; degraded features if absent)
 
 5. Usage
 
      ./firebox-signal        # launch Signal Desktop in the sandbox
+     ./firebox-signal sgnl://...   # open a Signal link
      ./firebox-signal -v     # verbose launcher tracing (set -x)
      ./firebox-signal --no-proxy   # ignore proxychains and connect directly
+     ./firebox-signal -h     # show launcher options
+
+     Launcher options are parsed until "--"; everything after it is treated as
+     positional. sgnl:// links (and http/https/file URLs) are forwarded to
+     Signal as a positional argument.
 
 6. Notes / Limitations
 

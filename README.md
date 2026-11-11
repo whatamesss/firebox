@@ -58,9 +58,9 @@ in the directory the launcher was invoked from.
 
 Linux with a Wayland session, plus `bwrap` (Bubblewrap). Individual scripts add
 their own tools — commonly `xdg-dbus-proxy`, `rsync`, `awk`, `file`, `sqlite3`
-and `findmnt`, with `jq` required for extension token scrubbing and `uuidgen`
-optional. `firebox-signal` and `firebox-opencode` also use `proxychains` when
-it is installed.
+and `findmnt`, with `jq` required for extension token scrubbing.
+`firebox-signal` and `firebox-opencode` also use `proxychains` when it is
+installed.
 
 ## Installation
 

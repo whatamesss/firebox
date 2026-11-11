@@ -41,9 +41,11 @@ throwaway tmpfs.
           /usr, /bin, /sbin, /usr/libexec/git-core (git's real binaries), libs
           and multiarch directories, /usr/local, /opt, /usr/share data (zoneinfo,
           locale, terminfo, git-core templates, CA certificates), and selected
-          /etc files (ld.so cache/conf, SSL certificates, resolv.conf,
-          nsswitch.conf, hosts, passwd/group, machine-id, localtime,
-          proxychains.conf, gitconfig, profile files).
+          /etc files (ld.so cache/conf, SSL certificates, nsswitch.conf,
+          localtime, proxychains.conf, gitconfig, profile files). /etc/passwd,
+          /etc/group, /etc/hosts and /etc/machine-id are synthesized per
+          session; /etc/resolv.conf is copied so a host symlink into an
+          unmounted directory cannot break DNS.
 
      Scratch (/tmp and $TMPDIR):
           /tmp is a bind of the host's /tmp/opencode, created at launch with
@@ -68,8 +70,9 @@ throwaway tmpfs.
 
      Environment:
           DISPLAY, WAYLAND_DISPLAY, XAUTHORITY, DBUS_SESSION_BUS_ADDRESS,
-          SSH_AUTH_SOCK, GNUPGHOME, GPG_AGENT_INFO and the KDE_* variables are
-          unset. LANG and LC_ALL are forced to C.UTF-8.
+          SSH_AUTH_SOCK, GNUPGHOME, GPG_AGENT_INFO, the PulseAudio/PipeWire
+          variables and the KDE_* variables are unset. LANG and LC_ALL are set
+          to an available UTF-8 locale (falling back to C).
           HOME is the real home directory and XDG_CONFIG_HOME, XDG_DATA_HOME,
           XDG_CACHE_HOME and XDG_STATE_HOME point at the real host
           directories so opencode locates its own configuration and data.
@@ -92,6 +95,11 @@ throwaway tmpfs.
      ./firebox-opencode [args...]    # additional arguments are forwarded to opencode
      ./firebox-opencode -v           # verbose launcher tracing (set -x)
      ./firebox-opencode --no-proxy   # ignore proxychains and connect directly
+     ./firebox-opencode -h           # show launcher options
+
+     Launcher options are recognised until "--"; everything after it is
+     forwarded to opencode verbatim, so `firebox-opencode -- --help` reaches
+     opencode's own help.
 
 6. Notes / Limitations
 
