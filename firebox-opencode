@@ -177,18 +177,36 @@ cat > "$OPENCODE_RUNTIME/tui.json" << 'EOF'
 }
 EOF
 
-# Host directories that must exist. PERSISTENT_DIRS are bound read-write.
+# ~/projects is the only source for the sandbox's /projects mount, so it must
+# exist before launch. Fail with an actionable message instead of starting
+# opencode in an empty or unexpected directory.
+if [[ ! -d "$PROJECTS_DIR" ]]; then
+    cat >&2 <<EOF
+Error: '$PROJECTS_DIR' does not exist.
+
+firebox-opencode mounts ~/projects into the sandbox as /projects, so create
+that directory first and put your projects in it:
+
+    mkdir -p "$PROJECTS_DIR"
+    mv <your-projects> "$PROJECTS_DIR/"
+
+Then re-run this launcher.
+EOF
+    exit 1
+fi
+
+# Remaining host directories that must exist. PERSISTENT_DIRS are bound
+# read-write.
 PERSISTENT_DIRS=(
     "$REAL_HOME/.opencode"
     "$REAL_HOME/.config/opencode"
     "$REAL_HOME/.cache/opencode"
     "$REAL_HOME/.local/share/opencode"
     "$REAL_HOME/.local/state/opencode"
-    "$PROJECTS_DIR"
 )
 for dir in "${PERSISTENT_DIRS[@]}"; do
     if [[ ! -d "$dir" ]]; then
-        echo "Error: Required directory '$dir' not found." >&2
+        echo "Error: Required directory '$dir' not found. Create it and re-run this launcher." >&2
         exit 1
     fi
 done

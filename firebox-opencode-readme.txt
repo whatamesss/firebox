@@ -25,6 +25,11 @@ throwaway tmpfs.
           set to the real home directory, so ~/.opencode/bin/opencode is the
           binary opencode upgrades in place.
 
+          ~/projects must already exist; it is the only host directory mapped
+          to /projects. If it is missing the launcher stops and prints the
+          mkdir command to run, rather than silently starting in an empty
+          sandbox.
+
      Persistent, read-write state:
           ~/projects                -> /projects
           ~/.opencode               -> ~/.opencode
