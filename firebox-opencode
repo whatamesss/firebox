@@ -22,7 +22,9 @@ set -euo pipefail
 #       ~/.local/share/opencode
 #       ~/.local/state/opencode
 #       ~/projects            (mounted at /projects)
-#   * read-only access to ~/.gitconfig
+#   * read-only access to ~/.gitconfig (if present)
+#   * read-only access to the Hugging Face model cache at ~/.cache/huggingface
+#     (if present; shared caches are readable but never writable from here)
 #   * no Wayland, no D-Bus, no GPU, no audio, no X11, no desktop portals.
 # -------------------------------------------------------------------------
 
@@ -378,6 +380,14 @@ if [[ -f "$REAL_HOME/.gitconfig" ]]; then
     BWRAP_GITENV+=(--setenv GIT_CONFIG_GLOBAL "$REAL_HOME/.gitconfig")
 fi
 
+# Optional read-only model cache. It may be shared with other local ML tools, so
+# the sandbox can read it but never modify it. Only bind it when it exists, so
+# first-run launches without a cache keep working.
+BWRAP_HF_CACHE=()
+if [[ -d "$REAL_HOME/.cache/huggingface" ]]; then
+    BWRAP_HF_CACHE+=(--ro-bind "$REAL_HOME/.cache/huggingface" "$REAL_HOME/.cache/huggingface")
+fi
+
 # -------------------------------------------------------------------------
 # Bwrap command construction
 #
@@ -474,6 +484,7 @@ bwrap \
     \
     "${BWRAP_RW[@]}" \
     "${BWRAP_GITCONFIG[@]}" \
+    "${BWRAP_HF_CACHE[@]}" \
     "${BWRAP_GITENV[@]}" \
     \
     --chdir "$SANDBOX_CWD" \

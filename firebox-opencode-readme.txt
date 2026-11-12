@@ -36,6 +36,9 @@ throwaway tmpfs.
 
      Read-only home data:
           ~/.gitconfig is bound read-only, if present (git identity).
+          ~/.cache/huggingface is bound read-only, if present, so tools inside
+          the sandbox can use the shared Hugging Face model cache without being
+          able to modify it.
 
      Read-only system:
           /usr, /bin, /sbin, /usr/libexec/git-core (git's real binaries), libs
