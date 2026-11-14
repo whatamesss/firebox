@@ -39,6 +39,35 @@ throwaway tmpfs.
           ~/.local/state/opencode   -> ~/.local/state/opencode
           /tmp/opencode             -> /tmp   (scratch, created at launch)
 
+     Android toolchain (read-write, created on first launch):
+          ~/Android                 -> ~/Android
+          ~/.gradle                 -> ~/.gradle
+          ~/.android                -> ~/.android
+
+          Building Android apps needs three writable trees the rest of the
+          sandbox does not expose: the JDK and Android SDK at ~/Android
+          (sdkmanager installs packages there, and JDK/SDK upgrades replace
+          files), ~/.gradle (Gradle caches and daemon state) and ~/.android
+          (adb RSA keys and AVD definitions). All three are created empty on
+          first launch if they do not exist yet, then bound read-write at their
+          host paths. The tool directories are prepended to PATH, so java,
+          javac, sdkmanager, avdmanager, adb and gradle resolve by name:
+
+              ~/Android/bin
+              ~/Android/jdk/bin            (or the highest jdk*/openjdk* tree)
+              ~/Android/Sdk/cmdline-tools/latest/bin
+              ~/Android/Sdk/platform-tools
+              ~/Android/Sdk/emulator
+              ~/Android/gradle*/bin
+
+          JAVA_HOME prefers a JDK under ~/Android and otherwise falls back to
+          the host's system JDK (/usr/lib/jvm, /usr/lib64/openjdk-*,
+          /opt/openjdk-bin-*, /opt/jdk*), which the read-only system mounts
+          already make visible. ANDROID_HOME and ANDROID_SDK_ROOT point at
+          ~/Android/Sdk (or ~/Android/sdk) but are only exported when an SDK is
+          present. Only paths that actually exist are added, so a host without
+          the toolchain is unaffected apart from the three empty directories.
+
      Read-only home data:
           ~/.gitconfig is bound read-only, if present (git identity).
           ~/.cache/huggingface is bound read-only, if present, so tools inside
@@ -97,6 +126,10 @@ throwaway tmpfs.
      proxychains (optional; proxychains4 on Debian/Ubuntu)
      opencode (expected at ~/.opencode/bin/opencode)
 
+     An Android toolchain under ~/Android (JDK and/or SDK) is optional, as is a
+     system JDK; whichever is found is mounted and added to PATH as described
+     above. ~/Android, ~/.gradle and ~/.android are created on first launch.
+
 5. Usage
 
      ./firebox-opencode              # start in /projects (or the current subfolder)
@@ -135,3 +168,8 @@ throwaway tmpfs.
      background service (opencode service status/restart, /pair and other
      remote clients) are not available inside the sandbox. Passing
      --standalone yourself is fine; it is never added twice.
+     Only ~/Android, ~/.gradle and ~/.android are exposed for the Android
+     toolchain. The first launch creates whatever is missing, so the launcher
+     leaves three (empty) directories in the home directory even if you never
+     build for Android. Anything else a toolchain writes -- for example
+     ~/.m2, ~/.konan or a ccache in ~/.cache -- stays invisible.

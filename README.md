@@ -42,7 +42,9 @@ Starts from an empty root and mounts only what a coding session needs: a
 read-only system tree, private `/tmp` and `/dev/shm`, and a handful of
 persistent read-write opencode directories. `HOME` is the real home directory
 (so `~/.opencode` is respected and upgraded in place), and the session begins
-in the directory the launcher was invoked from.
+in the directory the launcher was invoked from. An Android toolchain at
+`~/Android` (with `~/.gradle` and `~/.android`) is mounted read-write and its
+tools are added to `PATH`; the host's JDK is used when `~/Android` has none.
 
 → [`firebox-opencode-readme.txt`](firebox-opencode-readme.txt)
 

@@ -25,6 +25,10 @@ set -euo pipefail
 #   * read-only access to ~/.gitconfig (if present)
 #   * read-only access to the Hugging Face model cache at ~/.cache/huggingface
 #     (if present; shared caches are readable but never writable from here)
+#   * read-write access to the Android toolchain tree at ~/Android (created on
+#     first launch), with its JDK/SDK bin directories added to PATH; ~/.gradle
+#     and ~/.android are bound read-write too so Gradle can cache and adb can
+#     store its key. The host's system JDK is used when ~/Android has none.
 #   * no Wayland, no D-Bus, no GPU, no audio, no X11, no desktop portals.
 # -------------------------------------------------------------------------
 
@@ -407,6 +411,106 @@ if [[ -d "$REAL_HOME/.cache/huggingface" ]]; then
 fi
 
 # -------------------------------------------------------------------------
+# Android toolchain (~/Android)
+#
+# Building Android apps needs three writable things that nothing above
+# exposes: the JDK/SDK tree at ~/Android (sdkmanager installs packages there
+# and JDK/SDK upgrades replace files), ~/.gradle (Gradle caches and daemon
+# state) and ~/.android (adb RSA keys and AVD definitions). All three are
+# created empty on first launch -- otherwise there is nowhere persistent for
+# the tools to write -- and bound read-write at their host paths.
+#
+# The JDK and SDK bin directories are prepended to PATH so java, javac,
+# sdkmanager, avdmanager, adb and gradle resolve by name. JAVA_HOME prefers a
+# JDK inside ~/Android and otherwise falls back to the host's system JDK
+# (/usr/lib/jvm, /usr/lib64/openjdk-*, /opt/openjdk-bin-*, /opt/jdk*), which
+# the read-only system mounts already make visible. ANDROID_HOME and
+# ANDROID_SDK_ROOT are set only when an SDK is actually present.
+#
+# Recognised layout (any subset works):
+#   ~/Android/jdk  or ~/Android/jdk*/bin/java    JDK homes
+#   ~/Android/Sdk or ~/Android/sdk               Android SDK root
+# -------------------------------------------------------------------------
+ANDROID_ROOT="$REAL_HOME/Android"
+GRADLE_HOME="$REAL_HOME/.gradle"
+ADB_HOME="$REAL_HOME/.android"
+
+BWRAP_ANDROID=()
+BWRAP_ANDROID_ENV=()
+ANDROID_PATH=""
+ANDROID_SDK=""
+ANDROID_JAVA_HOME=""
+
+for dir in "$ANDROID_ROOT" "$GRADLE_HOME" "$ADB_HOME"; do
+    if [[ ! -d "$dir" ]]; then
+        mkdir -p "$dir" || echo "[WARNING] Could not create '$dir'." >&2
+    fi
+    [[ -d "$dir" ]] && BWRAP_ANDROID+=(--bind "$dir" "$dir")
+done
+
+for candidate in "$ANDROID_ROOT/Sdk" "$ANDROID_ROOT/sdk"; do
+    if [[ -d "$candidate" ]]; then
+        ANDROID_SDK="$candidate"
+        break
+    fi
+done
+
+# A JDK shipped inside ~/Android wins; only when there is none does the host's
+# system JDK apply (the highest-sorting tree wins when several are installed).
+if [[ -x "$ANDROID_ROOT/jdk/bin/java" ]]; then
+    ANDROID_JAVA_HOME="$ANDROID_ROOT/jdk"
+else
+    shopt -s nullglob
+    for candidate in "$ANDROID_ROOT"/jdk*/bin "$ANDROID_ROOT"/openjdk*/bin; do
+        if [[ -x "$candidate/java" ]]; then
+            ANDROID_JAVA_HOME="${candidate%/bin}"
+        fi
+    done
+    if [[ -z "$ANDROID_JAVA_HOME" ]]; then
+        for candidate in \
+            /usr/lib/jvm/*/bin \
+            /usr/lib64/openjdk-*/bin \
+            /opt/openjdk-bin-*/bin \
+            /opt/jdk*/bin
+        do
+            if [[ -x "$candidate/java" ]]; then
+                ANDROID_JAVA_HOME="${candidate%/bin}"
+            fi
+        done
+    fi
+    shopt -u nullglob
+fi
+
+ANDROID_BIN_DIRS=("$ANDROID_ROOT/bin")
+[[ -n "$ANDROID_JAVA_HOME" ]] && ANDROID_BIN_DIRS+=("$ANDROID_JAVA_HOME/bin")
+if [[ -n "$ANDROID_SDK" ]]; then
+    ANDROID_BIN_DIRS+=(
+        "$ANDROID_SDK/cmdline-tools/latest/bin"
+        "$ANDROID_SDK/platform-tools"
+        "$ANDROID_SDK/emulator"
+    )
+fi
+shopt -s nullglob
+for candidate in "$ANDROID_ROOT"/gradle*/bin; do
+    ANDROID_BIN_DIRS+=("$candidate")
+done
+shopt -u nullglob
+
+for candidate in "${ANDROID_BIN_DIRS[@]}"; do
+    [[ -d "$candidate" ]] || continue
+    ANDROID_PATH="${ANDROID_PATH:+$ANDROID_PATH:}$candidate"
+done
+
+[[ -n "$ANDROID_JAVA_HOME" ]] && BWRAP_ANDROID_ENV+=(--setenv JAVA_HOME "$ANDROID_JAVA_HOME")
+if [[ -n "$ANDROID_SDK" ]]; then
+    BWRAP_ANDROID_ENV+=(
+        --setenv ANDROID_HOME "$ANDROID_SDK"
+        --setenv ANDROID_SDK_ROOT "$ANDROID_SDK"
+    )
+fi
+(( VERBOSE )) && echo "[Info] Android toolchain: ${ANDROID_PATH:-no bin directories}" >&2
+
+# -------------------------------------------------------------------------
 # Bwrap command construction
 #
 # OpenCode 2.x normally drives a "background service" whose url/pid/port are
@@ -462,7 +566,7 @@ bwrap \
     --setenv XDG_STATE_HOME "$REAL_HOME/.local/state" \
     --setenv XDG_CONFIG_DIRS "/etc/xdg" \
     --setenv XDG_RUNTIME_DIR "/run/user/$(id -u)" \
-    --setenv PATH "$REAL_HOME/.opencode/bin:$PATH" \
+    --setenv PATH "${REAL_HOME}/.opencode/bin${ANDROID_PATH:+:$ANDROID_PATH}:$PATH" \
     --setenv OPENCODE_TUI_CONFIG "/etc/opencode-tui.json" \
     --setenv LANG "$SYSTEM_LOCALE" \
     --setenv LC_ALL "$SYSTEM_LOCALE" \
@@ -503,6 +607,8 @@ bwrap \
     "${BWRAP_RW[@]}" \
     "${BWRAP_GITCONFIG[@]}" \
     "${BWRAP_HF_CACHE[@]}" \
+    "${BWRAP_ANDROID[@]}" \
+    "${BWRAP_ANDROID_ENV[@]}" \
     "${BWRAP_GITENV[@]}" \
     \
     --chdir "$SANDBOX_CWD" \
