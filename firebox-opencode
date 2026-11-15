@@ -165,21 +165,19 @@ if [[ ! -f "$OPENCODE_RUNTIME/resolv.conf" ]]; then
     echo "[WARNING] Could not copy /etc/resolv.conf; DNS inside the sandbox may fail." >&2
 fi
 
-# TUI keybind overlay: drop Ctrl-C from both app_exit and input_clear so it
-# can no longer quit or clear the prompt; leave the session with /quit (or
-# ctrl+x q). The file is written locally just below and bind-mounted
-# read-only as /etc/opencode-tui.json; it is never fetched from the network.
-# Injected via OPENCODE_TUI_CONFIG, which opencode merges on top of the normal
-# tui.json. No "$schema" URL is included so nothing points at a remote
-# resource at launch.
-cat > "$OPENCODE_RUNTIME/tui.json" << 'EOF'
-{
-  "keybinds": {
-    "app_exit": "ctrl+d,<leader>q",
-    "input_clear": "none"
-  }
-}
-EOF
+# CLI keybind overlay. OpenCode V2 reads OPENCODE_CLI_CONFIG_CONTENT and
+# merges it over ~/.config/opencode/cli.json, so the launcher can adjust the
+# TUI without writing to the user's real configuration:
+#   * app.exit      -- drop Ctrl-C, so it can no longer quit the session
+#   * prompt.clear  -- drop Ctrl-C, so it can no longer wipe the prompt
+#   * terminal.copy -- "manual": Ctrl-C copies the current transcript
+#                      selection (and a selection inside the prompt) instead
+#                      of exiting. With the default "select" mode a selection
+#                      is copied on mouse-up and Ctrl-C merely clears it,
+#                      which is exactly the accidental-exit path.
+# Ctrl-C with nothing selected is a no-op; leave with /quit, ctrl+x q or
+# ctrl+d. The JSON is passed inline, so nothing is fetched or written to disk.
+OPENCODE_CLI_CONFIG='{"terminal":{"copy":"manual"},"keybinds":{"app.exit":"ctrl+d,<leader>q","prompt.clear":"none"}}'
 
 # ~/projects is the only source for the sandbox's /projects mount, so it must
 # exist before launch. Fail with an actionable message instead of starting
@@ -354,7 +352,6 @@ BWRAP_ETC=(
     --ro-bind-try /etc/gitconfig /etc/gitconfig
     --ro-bind "$OPENCODE_RUNTIME/passwd" /etc/passwd
     --ro-bind "$OPENCODE_RUNTIME/group" /etc/group
-    --ro-bind "$OPENCODE_RUNTIME/tui.json" /etc/opencode-tui.json
 )
 
 # Bind proxychains' config at its native path so the binary finds it.
@@ -567,7 +564,7 @@ bwrap \
     --setenv XDG_CONFIG_DIRS "/etc/xdg" \
     --setenv XDG_RUNTIME_DIR "/run/user/$(id -u)" \
     --setenv PATH "${REAL_HOME}/.opencode/bin${ANDROID_PATH:+:$ANDROID_PATH}:$PATH" \
-    --setenv OPENCODE_TUI_CONFIG "/etc/opencode-tui.json" \
+    --setenv OPENCODE_CLI_CONFIG_CONTENT "$OPENCODE_CLI_CONFIG" \
     --setenv LANG "$SYSTEM_LOCALE" \
     --setenv LC_ALL "$SYSTEM_LOCALE" \
     --setenv TMPDIR "/dev/shm" \

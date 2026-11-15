@@ -144,11 +144,11 @@ throwaway tmpfs.
 
 6. Notes / Limitations
 
-     Ctrl-C is disabled inside the sandbox (via a TUI keybind overlay set with
-     OPENCODE_TUI_CONFIG), so it cannot quit the session or clear the prompt.
-     The overlay is written to a local file at launch and bind-mounted
-     read-only over /etc/opencode-tui.json; it carries no remote "$schema"
-     URL and is never fetched from the network.
+     Ctrl-C is repurposed: inside the sandbox it copies the current transcript
+     selection instead of quitting or clearing the prompt. The launcher merges
+     an inline CLI keybind overlay (through OPENCODE_CLI_CONFIG_CONTENT) that
+     drops Ctrl-C from app.exit and prompt.clear and sets terminal.copy to
+     "manual". With nothing selected Ctrl-C is a no-op.
      Exit with /quit (or ctrl+x q, or ctrl+d).
      --new-session detaches the controlling terminal, so terminal resizes may
      not reflow until the session restarts. Remove that flag if this is a
