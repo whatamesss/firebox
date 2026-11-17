@@ -177,7 +177,90 @@ fi
 #                      which is exactly the accidental-exit path.
 # Ctrl-C with nothing selected is a no-op; leave with /quit, ctrl+x q or
 # ctrl+d. The JSON is passed inline, so nothing is fetched or written to disk.
-OPENCODE_CLI_CONFIG='{"terminal":{"copy":"manual"},"keybinds":{"app.exit":"ctrl+d,<leader>q","prompt.clear":"none"}}'
+#
+# Ctrl-Shift-C is handled by the small TUI plugin built below. Some terminals
+# report the shifted key as an uppercase "C" (or a different key code) that
+# OpenCode's built-in Ctrl-C copy handler does not recognise, so the plugin
+# re-emits it as a plain Ctrl-C keypress. That reuses the exact same copy path,
+# including the terminal's OSC 52 clipboard support.
+OPENCODE_CLI_CONFIG='{"terminal":{"copy":"manual"},"keybinds":{"app.exit":"ctrl+d,<leader>q","prompt.clear":"none"},"plugins":["/run/firebox-opencode/plugins/ctrl-shift-copy"]}'
+
+# Per-session TUI plugin. It lives in the throwaway runtime dir and is
+# bind-mounted read-only into the sandbox, so it is never written to the
+# user's config and disappears when the session ends.
+OPENCODE_PLUGIN_DIR="$OPENCODE_RUNTIME/plugins/ctrl-shift-copy"
+mkdir -p "$OPENCODE_PLUGIN_DIR"
+cat > "$OPENCODE_PLUGIN_DIR/package.json" <<'EOF'
+{
+  "name": "firebox-ctrl-shift-copy",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    "./tui": "./tui.js"
+  }
+}
+EOF
+cat > "$OPENCODE_PLUGIN_DIR/tui.js" <<'EOF'
+import { Plugin } from "@opencode/plugin/tui"
+
+// Mirrors the fields of an OpenTUI KeyEvent. OpenCode's built-in Ctrl-C
+// handler only needs name/ctrl/baseCode plus preventDefault/stopPropagation,
+// but the keymap may read the rest as well.
+function ctrlC() {
+    let prevented = false
+    let stopped = false
+
+    return {
+        name: "c",
+        ctrl: true,
+        meta: false,
+        shift: false,
+        option: false,
+        sequence: "c",
+        number: false,
+        raw: "c",
+        eventType: "press",
+        source: "raw",
+        super: false,
+        hyper: false,
+        capsLock: false,
+        numLock: false,
+        baseCode: 99,
+        repeated: false,
+        get defaultPrevented() { return prevented },
+        get propagationStopped() { return stopped },
+        preventDefault() { prevented = true },
+        stopPropagation() { stopped = true },
+    }
+}
+
+export default Plugin.define({
+    id: "firebox.ctrl-shift-copy",
+    setup(context) {
+        context.keymap.layer(() => ({
+            mode: "global",
+            priority: 1000,
+            commands: [{
+                id: "firebox.copy-selection",
+                title: "Copy selection",
+                group: "Firebox",
+                bind: "ctrl+shift+c",
+                palette: false,
+                run() {
+                    const input = context.renderer?.keyInput
+
+                    if (!input || typeof input.emit !== "function") {
+                        return
+                    }
+
+                    input.emit("keypress", ctrlC())
+                },
+            }],
+            bindings: ["firebox.copy-selection"],
+        }))
+    },
+})
+EOF
 
 # ~/projects is the only source for the sandbox's /projects mount, so it must
 # exist before launch. Fail with an actionable message instead of starting
@@ -549,6 +632,9 @@ bwrap \
     --tmpfs /dev/shm \
     --dir "/run/user/$(id -u)" \
     --chmod 700 "/run/user/$(id -u)" \
+    --dir "/run/firebox-opencode" \
+    --dir "/run/firebox-opencode/plugins" \
+    --ro-bind "$OPENCODE_RUNTIME/plugins" "/run/firebox-opencode/plugins" \
     \
     "${BWRAP_SYS[@]}" \
     "${BWRAP_LIBS[@]}" \

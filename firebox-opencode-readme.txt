@@ -144,12 +144,17 @@ throwaway tmpfs.
 
 6. Notes / Limitations
 
-     Ctrl-C is repurposed: inside the sandbox it copies the current transcript
-     selection instead of quitting or clearing the prompt. The launcher merges
-     an inline CLI keybind overlay (through OPENCODE_CLI_CONFIG_CONTENT) that
-     drops Ctrl-C from app.exit and prompt.clear and sets terminal.copy to
-     "manual". With nothing selected Ctrl-C is a no-op.
-     Exit with /quit (or ctrl+x q, or ctrl+d).
+     Ctrl-C copies the current transcript selection (or a selection inside
+     the prompt) instead of quitting or clearing the prompt. Ctrl-Shift-C
+     does the same: a small per-session TUI plugin re-emits it as a plain
+     Ctrl-C, which covers terminals that report the shifted key differently.
+     The launcher merges an inline CLI keybind overlay (through
+     OPENCODE_CLI_CONFIG_CONTENT) that drops Ctrl-C from app.exit and
+     prompt.clear, sets terminal.copy to "manual", and loads the plugin from
+     the sandbox's throwaway runtime directory. With nothing selected either
+     shortcut is a no-op. Exit with /quit (or ctrl+x q, or ctrl+d).
+     If your terminal keeps Ctrl-Shift-C for its own copy action, remap that
+     shortcut in the terminal so the key reaches OpenCode.
      --new-session detaches the controlling terminal, so terminal resizes may
      not reflow until the session restarts. Remove that flag if this is a
      problem.
