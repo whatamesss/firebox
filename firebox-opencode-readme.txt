@@ -155,6 +155,15 @@ throwaway tmpfs.
      shortcut is a no-op. Exit with /quit (or ctrl+x q, or ctrl+d).
      If your terminal keeps Ctrl-Shift-C for its own copy action, remap that
      shortcut in the terminal so the key reaches OpenCode.
+
+     Ctrl-Z undoes a paste or entry rather than suspending the session. The
+     overlay drops Ctrl-Z from terminal.suspend -- whose default handler
+     SIGTSTP's opencode's own process group, which can never be resumed inside
+     --new-session's controlling-terminal-free sandbox -- and adds it to
+     input.undo alongside the existing ctrl+- and super+z bindings. The
+     launcher also ignores SIGTSTP, so a tty-generated suspend signal cannot
+     wedge the launcher/bwrap parent either. Ctrl-Z is therefore a no-op when
+     there is nothing to undo.
      --new-session detaches the controlling terminal, so terminal resizes may
      not reflow until the session restarts. Remove that flag if this is a
      problem.

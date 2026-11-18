@@ -119,6 +119,16 @@ trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
 
+# Ctrl-Z is the TUI's undo key, not a job-control suspend. bwrap's
+# --new-session leaves this launcher (not the sandbox) holding the tty's
+# foreground process group, so a tty-generated SIGTSTP would stop the launcher
+# and the bwrap parent while the TUI keeps running with no controlling
+# terminal -- a wedged session that only a Ctrl-C/kill can tear down. Ignore
+# it here; SIG_IGN is inherited by bwrap and opencode, so a stray SIGTSTP sent
+# to opencode's own process group is harmless too. The keybind overlay below
+# is what turns the keystroke into input.undo.
+trap '' TSTP
+
 printf '%s:x:%s:%s:%s:%s:/bin/false\n' \
     "$REAL_USER" "$(id -u)" "$(id -g)" "$REAL_USER" "$REAL_HOME" > "$OPENCODE_RUNTIME/passwd"
 printf '%s:x:%s:\n' "$REAL_USER" "$(id -g)" > "$OPENCODE_RUNTIME/group"
@@ -175,6 +185,13 @@ fi
 #                      of exiting. With the default "select" mode a selection
 #                      is copied on mouse-up and Ctrl-C merely clears it,
 #                      which is exactly the accidental-exit path.
+#   * terminal.suspend -- drop Ctrl-Z. Its built-in handler calls
+#                         process.kill(0, "SIGTSTP"), stopping opencode's own
+#                         process group. With --new-session there is no
+#                         controlling terminal to resume it, so the TUI just
+#                         wedges until the whole sandbox is killed.
+#   * input.undo    -- bind Ctrl-Z here instead, so it undoes a paste or entry.
+#                      The existing ctrl+- and super+z bindings are kept.
 # Ctrl-C with nothing selected is a no-op; leave with /quit, ctrl+x q or
 # ctrl+d. The JSON is passed inline, so nothing is fetched or written to disk.
 #
@@ -183,7 +200,7 @@ fi
 # OpenCode's built-in Ctrl-C copy handler does not recognise, so the plugin
 # re-emits it as a plain Ctrl-C keypress. That reuses the exact same copy path,
 # including the terminal's OSC 52 clipboard support.
-OPENCODE_CLI_CONFIG='{"terminal":{"copy":"manual"},"keybinds":{"app.exit":"ctrl+d,<leader>q","prompt.clear":"none"},"plugins":["/run/firebox-opencode/plugins/ctrl-shift-copy"]}'
+OPENCODE_CLI_CONFIG='{"terminal":{"copy":"manual"},"keybinds":{"app.exit":"ctrl+d,<leader>q","prompt.clear":"none","terminal.suspend":"none","input.undo":"ctrl+z,ctrl+-,super+z"},"plugins":["/run/firebox-opencode/plugins/ctrl-shift-copy"]}'
 
 # Per-session TUI plugin. It lives in the throwaway runtime dir and is
 # bind-mounted read-only into the sandbox, so it is never written to the
