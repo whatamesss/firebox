@@ -501,8 +501,9 @@ done
 cat > "$EPHEMERAL_PROFILE/user.js" << 'EOUJS'
 /* --- Startup & Homepage --- */
 user_pref("datareporting.usage.uploadEnabled", false);
-user_pref("browser.startup.page", 0);
-user_pref("browser.startup.homepage", "about:blank");
+// Homepage/startup page are imported from the master profile below (emit_pref).
+// user_pref("browser.startup.page", 0);
+// user_pref("browser.startup.homepage", "about:blank");
 user_pref("browser.startup.firstrunSkipsHomepage", true);
 user_pref("browser.startup.homepage_override.mstone", "ignore");
 user_pref("browser.startup.homepage_override.buildID", "ignore");
@@ -773,7 +774,9 @@ user_pref("sidebar.backupState", "{\"command\":\"\",\"panelOpen\":false,\"launch
 EOUJS
 
 # Dynamic Settings Injection (Direct Line Copy - Safe & Sanitized)
-# We only inject UUIDs and UI Layout. Sidebar defaults to hardcoded above.
+# We inject UUIDs, UI Layout and the homepage/startup prefs. Sidebar defaults to
+# hardcoded above. Homepage prefs are emitted after the heredoc so they override
+# any values in it, letting a homepage configured in the master profile stick.
 if [[ -n "$SOURCE_PROFILE" && -f "$SOURCE_PROFILE/prefs.js" ]]; then
     # Copy complete prefs.js lines. The old sed/tr pipeline truncated values
     # containing "//" and concatenated the four lines without separators.
@@ -787,6 +790,8 @@ if [[ -n "$SOURCE_PROFILE" && -f "$SOURCE_PROFILE/prefs.js" ]]; then
         emit_pref "browser.uiCustomization.state"
         emit_pref "browser.uiCustomization.horizontalTabsBackup"
         emit_pref "extensions.quarantinedDomains.list"
+	emit_pref "browser.startup.page"
+	emit_pref "browser.startup.homepage"
     } >> "$EPHEMERAL_PROFILE/user.js"
 
     (( VERBOSE )) && echo "[Info] Imported UUIDs, UI Layout and quarantine list from prefs.js."
